@@ -1,0 +1,53 @@
+# Compiled class files
+*.class
+
+# Package files
+*.jar
+*.war
+*.ear
+
+# Log files
+*.log
+
+# Generated files
+target/
+bin/
+cache/
+ConformalPrediction/
+
+# IDE files
+.idea/
+.project
+.classpath
+.settings/
+
+# Local data and large files
+local_data/experiments/*
+local_data/cache/*
+local_data/results/*
+
+# Hadoop files
+derby.log
+metastore_db/
+
+# Python files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
