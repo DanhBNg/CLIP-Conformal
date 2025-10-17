@@ -1,0 +1,31 @@
+# Requirements for CLIP-Conformal Hadoop MapReduce
+# These are additional to the main requirements.txt
+
+# Hadoop integration
+pydoop>=2.0.0
+hdfs3>=0.3.1
+snakebite-py3>=3.0.5
+
+# Distributed computing
+dask>=2023.3.0
+distributed>=2023.3.0
+
+# Enhanced data processing
+pyarrow>=11.0.0
+fastparquet>=2023.2.0
+
+# Job monitoring and logging
+psutil>=5.9.0
+tqdm>=4.65.0
+
+# Configuration management
+pyyaml>=6.0
+configparser>=5.3.0
+
+# Performance profiling
+memory-profiler>=0.60.0
+line-profiler>=4.0.0
+
+# Testing and validation
+pytest>=7.0.0
+pytest-hadoop>=0.1.0

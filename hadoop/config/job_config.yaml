@@ -1,0 +1,61 @@
+# CLIP-Conformal MapReduce Job Configuration
+
+# Job Settings
+job:
+  name: "clip-conformal-mapreduce"
+  queue: "default"
+  memory: "4GB"
+  cores: 4
+  timeout: 3600  # seconds
+
+# Data Configuration
+data:
+  chunk_size: 128  # images per chunk
+  dataset_name: "dtd"
+  local_data_path: "./local_data/datasets"
+  working_dir: "./hadoop/temp"
+  results_output_dir: "./MapReduceResult"  # Output results to project directory
+
+# HDFS Configuration  
+hdfs:
+  namenode: "localhost:9000"
+  user: "hadoop"
+  input_path: "/input/dtd"
+  output_path: "/output/conformal"
+  intermediate_path: "/intermediate/logits"
+  block_size: "64MB"
+  replication: 3
+
+# Model Configuration
+model:
+  backbone: "CLIP-ViT-B/32"
+  batch_size: 32
+  device: "cpu"  # "cpu" or "cuda"
+  cache_dir: "./model_cache"
+
+# Conformal Prediction Configuration
+conformal:
+  alpha: 0.1  # desired coverage level
+  ncscore: "aps"  # non-conformity score: "lac", "aps", "raps"
+  calibration_ratio: 0.5
+  seeds: [42]  # random seeds for multiple runs
+
+# MapReduce Configuration
+mapreduce:
+  num_mappers: 4
+  num_reducers: 1
+  mapper_memory: "2GB"
+  reducer_memory: "4GB"
+  java_opts: "-Xmx1024m"
+
+# Hadoop Environment
+hadoop:
+  home: "C:/hadoop-3.3.0"
+  conf_dir: "C:/hadoop-3.3.0/etc/hadoop"
+  streaming_jar: "C:/hadoop-3.3.0/share/hadoop/tools/lib/hadoop-streaming-3.3.0.jar"
+  
+# Python Environment
+python:
+  executable: "python3"
+  virtual_env: null  # path to virtual environment if needed
+  requirements: "requirements.txt"
