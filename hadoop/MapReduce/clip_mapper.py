@@ -24,6 +24,95 @@ clip_preprocess = None
 device = None
 class_descriptions = None
 
+def process_chunk_local(chunk_file, descriptions_file, chunk_id):
+    """
+    Process một chunk locally (simulation của mapper)
+    """
+    print(f"🗺️  Processing chunk {chunk_id}: {chunk_file.name}")
+    
+    # Initialize CLIP model nếu chưa có
+    if clip_model is None:
+        initialize_clip_model()
+    
+    # Load class descriptions
+    if class_descriptions is None:
+        load_class_descriptions_from_file(descriptions_file)
+    
+    # Load chunk data từ text file
+    image_paths = []
+    labels = []
+    
+    with open(chunk_file, 'r', encoding='utf-8') as f:
+        for line in f:
+            parts = line.strip().split(',')
+            if len(parts) >= 3:
+                image_paths.append(parts[0])
+                labels.append(int(parts[1]))
+    
+    image_paths = np.array(image_paths)
+    labels = np.array(labels)
+    
+    print(f"    📸 Processing {len(image_paths)} images...")
+    
+    # Process images trong batches
+    batch_size = 32
+    all_logits = []
+    
+    for i in range(0, len(image_paths), batch_size):
+        batch_paths = image_paths[i:i+batch_size]
+        batch_images = []
+        
+        # Load và preprocess images
+        for img_path in batch_paths:
+            try:
+                image = Image.open(img_path).convert('RGB')
+                image_tensor = clip_preprocess(image)
+                batch_images.append(image_tensor)
+            except Exception as e:
+                print(f"    ⚠️  Error loading {img_path}: {e}")
+                # Use dummy image
+                dummy_tensor = torch.zeros((3, 224, 224))
+                batch_images.append(dummy_tensor)
+        
+        if batch_images:
+            # Stack thành batch tensor
+            batch_tensor = torch.stack(batch_images).to(device)
+            
+            # Encode với CLIP
+            with torch.no_grad():
+                # Image features
+                image_features = clip_model.encode_image(batch_tensor)
+                image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+                
+                # Text features (đã được precompute)
+                text_features = class_descriptions / class_descriptions.norm(dim=-1, keepdim=True)
+                
+                # Cosine similarity -> logits
+                logits = (image_features @ text_features.T) * 100  # Scale by temperature
+                
+                all_logits.append(logits.cpu().numpy())
+    
+    # Combine all logits
+    if all_logits:
+        combined_logits = np.vstack(all_logits)
+    else:
+        # Fallback nếu không có logits
+        combined_logits = np.random.randn(len(image_paths), 47)
+    
+    # Save outputs
+    output_dir = Path("temp") / "mapper_outputs"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    logits_file = output_dir / f"logits_chunk_{chunk_id}.npy"
+    labels_file = output_dir / f"labels_chunk_{chunk_id}.npy"
+    
+    np.save(logits_file, combined_logits)
+    np.save(labels_file, labels)
+    
+    print(f"    ✅ Chunk {chunk_id} processed: {combined_logits.shape}")
+    
+    return logits_file, labels_file
+
 def initialize_clip_model():
     """
     Khởi tạo CLIP-ViT-B/32 model trong mapper
@@ -41,6 +130,45 @@ def initialize_clip_model():
     clip_model.eval()
     
     print("✅ CLIP model loaded successfully", file=sys.stderr)
+
+def load_class_descriptions_from_file(descriptions_file):
+    """
+    Load class descriptions từ file cho Text Encoder
+    """
+    global class_descriptions
+    
+    if descriptions_file.suffix == '.json':
+        # Load từ JSON và encode lại
+        with open(descriptions_file, 'r') as f:
+            descriptions_data = json.load(f)
+        
+        # Extract text prompts từ descriptions data
+        if isinstance(descriptions_data, list) and len(descriptions_data) > 0:
+            if isinstance(descriptions_data[0], dict):
+                # Format: [{'text_prompt': 'a photo of ...', ...}, ...]
+                descriptions_list = [item['text_prompt'] for item in descriptions_data]
+            else:
+                # Format: ['a photo of ...', ...]
+                descriptions_list = descriptions_data
+        else:
+            descriptions_list = descriptions_data
+        
+        # Initialize CLIP for text encoding
+        device_temp = "cuda" if torch.cuda.is_available() else "cpu" 
+        clip_model_temp, _ = clip.load("ViT-B/32", device=device_temp)
+        
+        # Encode descriptions
+        text_tokens = clip.tokenize(descriptions_list).to(device_temp)
+        with torch.no_grad():
+            text_features = clip_model_temp.encode_text(text_tokens)
+        
+        class_descriptions = text_features.to(device)
+    else:
+        # Load từ .npy file
+        descriptions_data = np.load(descriptions_file, allow_pickle=True)
+        class_descriptions = torch.tensor(descriptions_data, dtype=torch.float32).to(device)
+    
+    print(f"✅ Loaded {class_descriptions.shape[0]} class descriptions", file=sys.stderr)
 
 def load_class_descriptions():
     """

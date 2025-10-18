@@ -13,10 +13,19 @@ import numpy as np
 from pathlib import Path
 import subprocess
 import math
+import torch
+import clip
+
+# Canonical project root and canonical hadoop_input directory
+project_root = Path(__file__).parent.parent.parent
+canonical_hadoop_input = project_root / "hadoop_input"
+canonical_hadoop_input.mkdir(parents=True, exist_ok=True)
 
 def load_dtd_dataset():
     """Load toàn bộ DTD dataset từ thư mục images"""
-    dtd_root = Path("local_data/datasets/dtd/images")
+    # Use absolute path từ project root
+    project_root = Path(__file__).parent.parent.parent
+    dtd_root = project_root / "local_data" / "datasets" / "dtd" / "images"
     
     # DTD có 47 texture classes
     texture_classes = [
@@ -33,13 +42,13 @@ def load_dtd_dataset():
     
     all_images = []
     
-    print(f"[+] Loading DTD dataset from {dtd_root}")
+    print(f"📁 Loading DTD dataset from {dtd_root}")
     
     for class_idx, texture_name in enumerate(texture_classes):
         class_dir = dtd_root / texture_name
         
         if not class_dir.exists():
-            print(f"Warning: {class_dir} not found")
+            print(f"⚠️  Warning: {class_dir} not found")
             continue
             
         # Load tất cả ảnh trong class này
@@ -48,16 +57,89 @@ def load_dtd_dataset():
         for img_path in image_files:
             image_record = {
                 'image_path': str(img_path.absolute()),
-                'class_index': class_idx,
                 'class_name': texture_name,
-                'image_id': f"dtd_{class_idx:02d}_{img_path.stem}"
+                'class_idx': class_idx
             }
             all_images.append(image_record)
-        
-        print(f"  {texture_name}: {len(image_files)} anh")
     
-    print(f"[+] Total DTD images loaded: {len(all_images)}")
+    print(f"✅ Loaded {len(all_images)} images across {len(texture_classes)} texture classes")
+    
     return all_images, texture_classes
+
+def create_dtd_chunks(all_images, chunk_size=1410):
+    """Chia DTD dataset thành chunks"""
+    print(f"✂️  Creating chunks of size {chunk_size}")
+    
+    # Shuffle để đảm bảo distribution đồng đều
+    np.random.shuffle(all_images)
+    
+    chunks = []
+    
+    for i in range(0, len(all_images), chunk_size):
+        chunk = all_images[i:i+chunk_size]
+        chunks.append(chunk)
+        print(f"  Chunk {len(chunks)}: {len(chunk)} images")
+    
+    print(f"✅ Created {len(chunks)} chunks")
+    return chunks
+
+def save_chunks_to_files(chunks):
+    """Save chunks to .npz files"""
+    print("💾 Saving chunks to files...")
+    
+    # Tạo thư mục temp
+    chunks_dir = Path("temp") / "chunks"
+    chunks_dir.mkdir(parents=True, exist_ok=True)
+    
+    chunk_files = []
+    
+    for i, chunk in enumerate(chunks):
+        # Extract image paths và labels
+        image_paths = [record['image_path'] for record in chunk]
+        labels = [record['class_idx'] for record in chunk]
+        
+        # Save as npz file
+        chunk_file = chunks_dir / f"chunk_{i+1}.npz"
+        np.savez(chunk_file, 
+                image_paths=image_paths,
+                labels=labels)
+        
+        chunk_files.append(chunk_file)
+        print(f"  📦 Saved chunk {i+1}: {len(image_paths)} images -> {chunk_file}")
+    
+    print(f"✅ All chunks saved to {chunks_dir}")
+    return chunk_files
+
+def create_class_descriptions(texture_classes):
+    """Tạo text descriptions cho CLIP text encoder"""
+    print("📝 Creating class descriptions for CLIP text encoder...")
+    
+    # Initialize CLIP for text encoding
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    clip_model, _ = clip.load("ViT-B/32", device=device)
+    
+    # Create descriptive prompts cho mỗi texture class
+    descriptions = []
+    for texture in texture_classes:
+        # Create descriptive prompt
+        prompt = f"a photo of {texture} texture"
+        descriptions.append(prompt)
+    
+    print(f"  📝 Created descriptions for {len(descriptions)} classes")
+    
+    # Encode text descriptions
+    text_tokens = clip.tokenize(descriptions).to(device)
+    
+    with torch.no_grad():
+        text_features = clip_model.encode_text(text_tokens)
+    
+    # Save encoded features into canonical hadoop_input
+    descriptions_dir = canonical_hadoop_input
+    descriptions_file = descriptions_dir / "class_descriptions.npy"
+    np.save(descriptions_file, text_features.cpu().numpy())
+    
+    print(f"✅ Class descriptions saved to: {descriptions_file}")
+    return descriptions_file
 
 def create_dtd_chunks(all_images, chunk_size=1410):
     """
@@ -95,7 +177,7 @@ def save_chunks_to_files(chunks):
     Lưu mỗi chunk thành file .txt để upload lên HDFS
     Format: image_path,class_index,class_name,image_id
     """
-    output_dir = Path("hadoop_input/dtd_chunks")
+    output_dir = canonical_hadoop_input / "dtd_chunks"
     output_dir.mkdir(parents=True, exist_ok=True)
     
     chunk_files = []
@@ -105,7 +187,7 @@ def save_chunks_to_files(chunks):
         
         with open(chunk_file, 'w', encoding='utf-8') as f:
             for img_data in chunk:
-                line = f"{img_data['image_path']},{img_data['class_index']},{img_data['class_name']},{img_data['image_id']}\n"
+                line = f"{img_data['image_path']},{img_data['class_idx']},{img_data['class_name']}\n"
                 f.write(line)
         
         # Kiểm tra file size
@@ -135,10 +217,12 @@ def create_class_descriptions(texture_classes):
         }
         descriptions.append(desc)
     
-    # Lưu class descriptions
-    desc_file = Path("hadoop_input/dtd_class_descriptions.json")
+    # Lưu class descriptions to canonical hadoop_input
+    desc_file = canonical_hadoop_input / "dtd_class_descriptions.json"
     with open(desc_file, 'w', encoding='utf-8') as f:
         json.dump(descriptions, f, indent=2, ensure_ascii=False)
+    print(f"[+] Created class descriptions: {desc_file}")
+    return desc_file
     
     print(f"[+] Created class descriptions: {desc_file}")
     return desc_file

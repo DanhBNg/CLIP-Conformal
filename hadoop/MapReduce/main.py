@@ -5,6 +5,7 @@ import numpy as np
 from pathlib import Path
 from datetime import datetime
 import time
+import subprocess
 
 # Add project root to path
 project_root = Path(__file__).parent.parent.parent
@@ -15,42 +16,147 @@ from conformal.conformal_methods import lac, aps, raps
 from conformal.metrics import evaluate_conformal, accuracy
 
 # Import chart generation functions
-from draw_charts import create_visualization_charts
+try:
+    from draw_charts import create_visualization_charts
+except ImportError:
+    print("Warning: draw_charts module not found")
+    def create_visualization_charts(results, texture_classes):
+        print("Charts module not available")
 
-def load_dtd_data():
-    """Load DTD dataset from cache"""
-    print('[+] Loading DTD dataset from cache...')
+def setup_hadoop_environment():
+    """Kiểm tra môi trường Hadoop (không bắt buộc cho standalone mode)"""
+    print("🔧 Kiểm tra môi trường...")
     
-    cache_file = project_root / 'local_data' / 'cache' / 'dtd_clip-vit-b_32.npz'
+    # Kiểm tra Hadoop installation (optional)
+    try:
+        result = subprocess.run(['hadoop', 'version'], capture_output=True, text=True, timeout=3)
+        if result.returncode == 0:
+            print("✅ Hadoop có sẵn - có thể chạy distributed mode")
+            return True
+        else:
+            print("📍 Chạy ở chế độ standalone (không cần Hadoop)")
+            return False
+    except Exception:
+        print("📍 Chạy ở chế độ standalone (không cần Hadoop)")
+        return False
+
+def stage1_prepare_data():
+    """
+    GIAI ĐOẠN 1: CHUẨN BỊ DỮ LIỆU ĐẦU VÀO
+    DTD dataset chia thành chunks và upload lên HDFS
+    """
+    print("\n" + "="*60)
+    print("📁 STAGE 1: PREPARING INPUT DATA")
+    print("="*60)
     
-    if not cache_file.exists():
-        raise FileNotFoundError(f"DTD cache file not found: {cache_file}")
+    # Import prepare_data functions
+    from prepare_data import (
+        load_dtd_dataset, 
+        create_dtd_chunks, 
+        save_chunks_to_files,
+        create_class_descriptions
+    )
     
-    # Load cached data
-    data = np.load(cache_file)
+    # Load DTD dataset (5,640 ảnh)
+    all_images, texture_classes = load_dtd_dataset()
     
-    # Extract logits and labels (using actual keys from the file)
-    logits = data['logits_ds']  # CLIP logits/features  
-    labels = data['refs_ds']    # Ground truth labels
+    # Chia thành 4 chunks (1410 ảnh/chunk) - tương ứng HDFS block size 128MB
+    chunks = create_dtd_chunks(all_images, chunk_size=1410)
     
-    # Load class names from DTD dataset
-    dtd_classes = [
-        'banded', 'blotchy', 'braided', 'bubbly', 'bumpy', 'chequered',
-        'cobwebbed', 'cracked', 'crosshatched', 'crystalline', 'dotted',
-        'fibrous', 'flecked', 'freckled', 'frilly', 'gauzy', 'grid',
-        'grooved', 'honeycombed', 'interlaced', 'knitted', 'lacelike',
-        'lined', 'marbled', 'matted', 'meshed', 'paisley', 'perforated',
-        'pitted', 'pleated', 'polka-dotted', 'porous', 'potholed',
-        'scaly', 'smeared', 'spiralled', 'sprinkled', 'stained',
-        'stratified', 'striped', 'studded', 'swirly', 'veined',
-        'waffled', 'woven', 'wrinkled', 'zigzagged'
-    ]
+    # Save chunks to files
+    chunk_files = save_chunks_to_files(chunks)
     
-    print(f"[+] Loaded {len(logits)} samples with {len(dtd_classes)} classes")
-    print(f"[+] Logits shape: {logits.shape}")
-    print(f"[+] Labels range: {labels.min()} to {labels.max()}")
+    # Create class descriptions for text encoder
+    descriptions_file = create_class_descriptions(texture_classes)
     
-    return logits, labels, dtd_classes
+    print("✅ Stage 1 completed: Data prepared for MapReduce")
+    return chunk_files, descriptions_file, texture_classes
+
+def stage2_map_phase(chunk_files, descriptions_file):
+    """
+    GIAI ĐOẠN 2: MAP PHASE - CLIP ENCODING
+    Mỗi Mapper xử lý 1 chunk với CLIP-ViT-B/32
+    """
+    print("\n" + "="*60)
+    print("🗺️  STAGE 2: MAP PHASE - CLIP ENCODING")
+    print("="*60)
+    
+    # Import CLIP mapper
+    from clip_mapper import process_chunk_local
+    
+    mapper_outputs = []
+    
+    # Process mỗi chunk qua mapper (parallel simulation)
+    for i, chunk_file in enumerate(chunk_files):
+        print(f"\n📝 Processing chunk {i+1}/{len(chunk_files)}: {chunk_file.name}")
+        
+        # Execute mapper trên chunk này
+        logits_file, labels_file = process_chunk_local(chunk_file, descriptions_file, chunk_id=i+1)
+        
+        mapper_outputs.append({
+            'chunk_id': i+1,
+            'logits_file': logits_file,
+            'labels_file': labels_file
+        })
+    
+    print("✅ Stage 2 completed: All chunks processed by mappers")
+    return mapper_outputs
+
+def stage3_shuffle_sort(mapper_outputs):
+    """
+    GIAI ĐOẠN 3: SHUFFLE & SORT
+    Gom nhóm và sắp xếp outputs từ mappers
+    """
+    print("\n" + "="*60)
+    print("🔄 STAGE 3: SHUFFLE & SORT")
+    print("="*60)
+    
+    print("📊 Collecting and sorting mapper outputs...")
+    
+    # Sort mapper outputs theo chunk_id để đảm bảo consistency
+    sorted_outputs = sorted(mapper_outputs, key=lambda x: x['chunk_id'])
+    
+    # Verify integrity của mapper outputs
+    total_samples = 0
+    for output in sorted_outputs:
+        logits = np.load(output['logits_file'])
+        labels = np.load(output['labels_file'])
+        total_samples += len(logits)
+        print(f"  Chunk {output['chunk_id']}: {len(logits)} samples")
+    
+    print(f"📈 Total samples collected: {total_samples}")
+    print("✅ Stage 3 completed: Data shuffled and sorted")
+    return sorted_outputs
+
+def stage4_reduce_phase(sorted_outputs, texture_classes):
+    """
+    GIAI ĐOẠN 4: REDUCE PHASE - CONFORMAL PREDICTION
+    Gộp toàn bộ logits và apply Conformal Prediction
+    """
+    print("\n" + "="*60)
+    print("📉 STAGE 4: REDUCE PHASE - CONFORMAL PREDICTION")
+    print("="*60)
+    
+    # Import conformal prediction modules
+    from conformal_reducer import aggregate_mapper_outputs, run_conformal_algorithms
+    
+    # Aggregate toàn bộ logits từ mappers thành ma trận [total_samples × 47]
+    print("🔗 Aggregating logits from all mappers...")
+    combined_logits, combined_labels = aggregate_mapper_outputs(sorted_outputs)
+    
+    print(f"📊 Combined logits shape: {combined_logits.shape}")
+    print(f"📊 Combined labels shape: {combined_labels.shape}")
+    
+    # Chia data: calibration (50%) và test (50%)
+    print("✂️  Splitting into calibration and test sets...")
+    calib_logits, calib_labels, test_logits, test_labels = split_data(combined_logits, combined_labels)
+    
+    # Apply Conformal Prediction algorithms (LAC, APS, RAPS)
+    print("🎯 Running Conformal Prediction algorithms...")
+    results = run_conformal_algorithms(calib_logits, calib_labels, test_logits, test_labels)
+    
+    print("✅ Stage 4 completed: Conformal Prediction finished")
+    return results
 
 def split_data(logits, labels, split_ratio=0.5):
     """Split data into calibration and test sets"""
@@ -72,140 +178,7 @@ def split_data(logits, labels, split_ratio=0.5):
     
     return calib_logits, calib_labels, test_logits, test_labels
 
-def run_conformal_prediction(calib_logits, calib_labels, test_logits, test_labels, alpha=0.1):
-    """Run conformal prediction with LAC, APS, and RAPS methods"""
-    print(f'[+] Running conformal prediction with alpha={alpha} (target coverage: {1-alpha:.1%})')
-    
-    results = {}
-    
-    # Convert to torch tensors
-    import torch
-    calib_preds = torch.tensor(calib_logits, dtype=torch.float32)
-    test_preds = torch.tensor(test_logits, dtype=torch.float32)
-    calib_labs = torch.tensor(calib_labels, dtype=torch.long)
-    test_labs = torch.tensor(test_labels, dtype=torch.long)
-    
-    methods = ['LAC', 'APS', 'RAPS']
-    
-    for method in methods:
-        print(f'\n[+] Running {method} method...')
-        start_time = time.time()
-        
-        try:
-            if method == 'LAC':
-                pred_sets = lac(calib_preds, calib_labs, test_preds, alpha)
-            elif method == 'APS':
-                pred_sets = aps(calib_preds, calib_labs, test_preds, alpha)
-            elif method == 'RAPS':
-                # RAPS needs additional parameters
-                lambda_raps = 0.1  # penalty multiplier
-                k_raps = 5         # top-k parameter
-                pred_sets = raps(calib_preds, calib_labs, test_preds, alpha, lambda_raps, k_raps)
-            
-            # Calculate metrics
-            if hasattr(pred_sets, 'numpy'):
-                pred_sets_np = pred_sets.numpy()
-            else:
-                pred_sets_np = pred_sets
-                
-            # Calculate coverage rate
-            correct_predictions = 0
-            total_predictions = len(test_labels)
-            
-            for i, true_label in enumerate(test_labels):
-                if isinstance(pred_sets_np[i], (list, np.ndarray)):
-                    if true_label in pred_sets_np[i]:
-                        correct_predictions += 1
-                else:
-                    # Handle case where pred_sets might be different format
-                    correct_predictions += 1  # fallback
-            
-            coverage = correct_predictions / total_predictions
-            
-            # Calculate average set size
-            if isinstance(pred_sets_np, np.ndarray) and pred_sets_np.ndim > 1:
-                avg_set_size = np.mean(np.sum(pred_sets_np, axis=1))
-            else:
-                avg_set_size = np.mean([len(s) if hasattr(s, '__len__') else 1 for s in pred_sets_np])
-            
-            processing_time = time.time() - start_time
-            
-            results[method] = {
-                'method': method,
-                'coverage_rate': float(coverage),
-                'avg_set_size': float(avg_set_size),
-                'total_samples': len(test_labels),
-                'calibration_size': len(calib_labels),
-                'test_size': len(test_labels),
-                'processing_time': float(processing_time),
-                'alpha': alpha,
-                'target_coverage': 1 - alpha
-            }
-            
-            print(f"  ✓ Coverage: {coverage:.3f} ({coverage*100:.1f}%)")
-            print(f"  ✓ Avg set size: {avg_set_size:.2f}")
-            print(f"  ✓ Processing time: {processing_time:.2f}s")
-            
-        except Exception as e:
-            print(f"  ⚠ Error in {method}: {str(e)}")
-            print(f"    Using empirical estimation based on logits...")
-            
-            # Empirical calculation based on logits and actual data
-            processing_time = time.time() - start_time
-            
-            # Calculate empirical coverage based on top predictions
-            softmax_probs = torch.softmax(test_preds, dim=1)
-            top_probs, top_indices = torch.topk(softmax_probs, k=3, dim=1)
-            
-            # Empirical coverage calculation
-            empirical_coverage = 0
-            total_set_size = 0
-            
-            for i in range(len(test_labels)):
-                true_label = test_labels[i]
-                
-                # Determine prediction set size based on method
-                if method == 'LAC':
-                    # Simple threshold-based
-                    threshold = 1.0 - alpha
-                    pred_set = top_indices[i][top_probs[i] > threshold/3]
-                    set_size = max(1, len(pred_set))
-                elif method == 'APS':
-                    # Adaptive - variable set size
-                    cumsum_probs = torch.cumsum(top_probs[i], dim=0)
-                    set_size = int(torch.argmax((cumsum_probs > (1-alpha)).float()) + 1)
-                    set_size = min(set_size, 3)
-                else:  # RAPS
-                    # Regularized - conservative approach
-                    set_size = min(2, len(top_indices[i]))
-                
-                # Check if true label is in top predictions
-                if true_label in top_indices[i][:set_size]:
-                    empirical_coverage += 1
-                
-                total_set_size += set_size
-            
-            empirical_coverage /= len(test_labels)
-            avg_set_size = total_set_size / len(test_labels)
-            
-            results[method] = {
-                'method': method,
-                'coverage_rate': float(empirical_coverage),
-                'avg_set_size': float(avg_set_size),
-                'total_samples': len(test_labels),
-                'calibration_size': len(calib_labels),
-                'test_size': len(test_labels),
-                'processing_time': float(processing_time),
-                'alpha': alpha,
-                'target_coverage': 1 - alpha,
-                'note': 'Empirical estimation due to implementation incompatibility'
-            }
-            
-            print(f"  ✓ Empirical coverage: {empirical_coverage:.3f} ({empirical_coverage*100:.1f}%)")
-            print(f"  ✓ Empirical avg set size: {avg_set_size:.2f}")
-            print(f"  ✓ Processing time: {processing_time:.2f}s")
-    
-    return results
+# run_conformal_prediction được thay thế bằng run_conformal_algorithms trong conformal_reducer.py
 
 def save_results(results, output_dir=None):
     """Save results to files and create visualization charts"""
@@ -464,46 +437,167 @@ def save_results(results, output_dir):
     
     return results
 
+def mapreduce_orchestrator():
+    """
+    MAIN MAPREDUCE ORCHESTRATOR
+    Điều phối toàn bộ pipeline MapReduce cho CLIP-Conformal
+    Thu thập thời gian thực tế từ mỗi giai đoạn
+    """
+    print("🚀 STARTING CLIP-CONFORMAL MAPREDUCE PIPELINE")
+    print("=" * 80)
+    
+    total_start_time = time.time()
+    
+    # Initialize timing data để track thời gian thực
+    stage_times = {}
+    
+    # Setup Hadoop environment
+    hadoop_available = setup_hadoop_environment()
+    
+    try:
+        # STAGE 1: Prepare data
+        stage_start = time.time()
+        chunk_files, descriptions_file, texture_classes = stage1_prepare_data()
+        stage_times['data_preparation'] = time.time() - stage_start
+        
+        # STAGE 2: Map phase - CLIP encoding
+        stage_start = time.time()
+        mapper_outputs = stage2_map_phase(chunk_files, descriptions_file)
+        stage_times['map_phase'] = time.time() - stage_start
+        
+        # STAGE 3: Shuffle & Sort
+        stage_start = time.time()
+        sorted_outputs = stage3_shuffle_sort(mapper_outputs)
+        stage_times['shuffle_sort'] = time.time() - stage_start
+        
+        # STAGE 4: Reduce phase - Conformal Prediction
+        stage_start = time.time()
+        results = stage4_reduce_phase(sorted_outputs, texture_classes)
+        stage_times['reduce_phase'] = time.time() - stage_start
+        
+        # Calculate total time
+        total_time = time.time() - total_start_time
+        stage_times['total_time'] = total_time
+        
+        # Add timing data to results để pass cho chart generation
+        results['_stage_times'] = stage_times
+        
+        print("\n" + "="*80)
+        print("🎉 MAPREDUCE PIPELINE COMPLETED SUCCESSFULLY")
+        print(f"⏱️  Total processing time: {total_time:.2f} seconds")
+        print(f"⏱️  Data prep: {stage_times['data_preparation']:.3f}s")
+        print(f"⏱️  Map phase: {stage_times['map_phase']:.3f}s") 
+        print(f"⏱️  Shuffle/Sort: {stage_times['shuffle_sort']:.3f}s")
+        print(f"⏱️  Reduce phase: {stage_times['reduce_phase']:.3f}s")
+        print("="*80)
+        
+        return results, texture_classes
+        
+    except Exception as e:
+        print(f"\n❌ MAPREDUCE PIPELINE FAILED: {e}")
+        raise e
+
+def create_results_summary(results, texture_classes):
+    """Create results summary for charts với real timing data"""
+    print("\n📊 CREATING RESULTS SUMMARY")
+    print("-" * 40)
+    
+    # Extract timing data if available
+    stage_times = results.pop('_stage_times', None)
+    
+    # Create summary từ results  
+    summary = {}
+    
+    for alpha in results:
+        summary[alpha] = {}
+        for method in results[alpha]:
+            result = results[alpha][method]
+            summary[alpha][method] = {
+                'coverage': result['coverage'],
+                'avg_set_size': result['avg_set_size'],
+                'prediction_sets': result['prediction_sets']
+            }
+    
+    # Add timing data back for chart generation
+    if stage_times:
+        summary['_stage_times'] = stage_times
+        print(f"✅ Real timing data added: {stage_times}")
+    
+    print("✅ Results summary created")
+    return summary
+
 def main():
-    """Main function to run conformal prediction on DTD dataset"""
+    """Main function chạy MapReduce pipeline thay vì load cache"""
     print('=' * 60)
-    print('🎯 CLIP-Conformal Prediction on DTD Dataset')
+    print('🎯 CLIP-Conformal Prediction via MapReduce')
     print('=' * 60)
     
     try:
         # Set random seed for reproducibility
         np.random.seed(42)
         
-        # Load DTD data
-        logits, labels, classnames = load_dtd_data()
-        
-        # Split into calibration and test sets
-        calib_logits, calib_labels, test_logits, test_labels = split_data(logits, labels)
-        
-        # Run conformal prediction
-        results = run_conformal_prediction(calib_logits, calib_labels, test_logits, test_labels)
+        # Run MapReduce pipeline thay vì load_dtd_data()
+        results, texture_classes = mapreduce_orchestrator()
         
         # Save results to original MapReduceResult directory
         output_dir = Path('../../MapReduceResult')
-        saved_results = save_results(results, output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create Raw_Data subdirectory for JSON results
+        raw_data_dir = output_dir / 'Raw_Data'
+        raw_data_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Save results as JSON in Raw_Data folder
+        results_file = raw_data_dir / f'conformal_results_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
+        
+        # Convert results to serializable format (skip timing data)
+        serializable_results = {}
+        for alpha, methods in results.items():
+            if alpha == '_stage_times':  # Skip timing data for JSON serialization
+                continue
+            serializable_results[alpha] = {}
+            for method, data in methods.items():
+                serializable_results[alpha][method] = {}
+                for key, value in data.items():
+                    if isinstance(value, np.ndarray):
+                        serializable_results[alpha][method][key] = value.tolist()
+                    elif hasattr(value, 'item'):  # scalar numpy types
+                        serializable_results[alpha][method][key] = value.item()
+                    else:
+                        serializable_results[alpha][method][key] = value
+        
+        with open(results_file, 'w') as f:
+            json.dump(serializable_results, f, indent=2)
+        
+        print(f"✅ Results saved to: {results_file}")
+        
+        # Create results summary for charts
+        summary = create_results_summary(results, texture_classes)
+        
+        # Generate visualization charts using real results
+        print("\n📊 GENERATING VISUALIZATION CHARTS")
+        print("-" * 40)
+        create_visualization_charts(summary, texture_classes)
         
         # Print summary
         print(f'\n{"="*60}')
         print('📊 CONFORMAL PREDICTION RESULTS SUMMARY:')
         print('='*60)
         
-        for method, data in results.items():
-            coverage = data['coverage_rate']
+        # Display results for first alpha value
+        first_alpha = list(results.keys())[0]
+        for method, data in results[first_alpha].items():
+            coverage = data['coverage']
             size = data['avg_set_size']
-            target = data['target_coverage']
+            target = 1 - first_alpha
             
             status = "✓" if coverage >= target * 0.95 else "⚠"
             
             print(f"  {status} {method:4s}: Coverage={coverage:.3f} ({coverage*100:.1f}%), "
-                  f"Size={size:.1f}, Time={data['processing_time']:.2f}s")
+                  f"Size={size:.1f}")
         
         print(f'\n[+] Results saved in: {output_dir}')
-        print('[+] DTD Conformal Prediction completed successfully!')
+        print('[+] DTD Conformal Prediction completed successfully via MapReduce!')
         
         return True
         

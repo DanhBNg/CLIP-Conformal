@@ -20,6 +20,245 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 from datetime import datetime
+import torch
+
+def aggregate_mapper_outputs(sorted_outputs):
+    """
+    Gộp toàn bộ logits từ mapper outputs thành ma trận kết hợp
+    """
+    print("🔗 Aggregating logits from all mapper outputs...")
+    
+    all_logits = []
+    all_labels = []
+    
+    for output in sorted_outputs:
+        # Load logits và labels từ mỗi chunk
+        logits = np.load(output['logits_file'])
+        labels = np.load(output['labels_file'])
+        
+        all_logits.append(logits)
+        all_labels.append(labels)
+        
+        print(f"  Chunk {output['chunk_id']}: {logits.shape[0]} samples, {logits.shape[1]} classes")
+    
+    # Concatenate all chunks
+    combined_logits = np.vstack(all_logits)
+    combined_labels = np.concatenate(all_labels)
+    
+    print(f"🎯 Total aggregated: {combined_logits.shape[0]} samples, {combined_logits.shape[1]} classes")
+    
+    return combined_logits, combined_labels
+
+def run_conformal_algorithms(calib_logits, calib_labels, test_logits, test_labels):
+    """
+    Chạy các thuật toán Conformal Prediction: LAC, APS, RAPS
+    """
+    print("🎯 Running Conformal Prediction algorithms...")
+    
+    results = {}
+    alpha_values = [0.1, 0.05, 0.2]  # Different confidence levels
+    
+    for alpha in alpha_values:
+        print(f"\n🔍 Testing with alpha={alpha} (target coverage: {1-alpha:.1%})")
+        results[alpha] = {}
+        
+        # Convert to torch tensors for processing
+        calib_preds = torch.tensor(calib_logits, dtype=torch.float32)
+        test_preds = torch.tensor(test_logits, dtype=torch.float32)
+        calib_labs = torch.tensor(calib_labels, dtype=torch.long)
+        test_labs = torch.tensor(test_labels, dtype=torch.long)
+        
+        # Apply softmax to get probabilities
+        calib_probs = torch.softmax(calib_preds, dim=1)
+        test_probs = torch.softmax(test_preds, dim=1)
+        
+        # LAC (Least Ambiguous Conformal)
+        results[alpha]['LAC'] = run_lac_algorithm(calib_probs, calib_labs, test_probs, test_labs, alpha)
+        
+        # APS (Adaptive Prediction Sets)
+        results[alpha]['APS'] = run_aps_algorithm(calib_probs, calib_labs, test_probs, test_labs, alpha)
+        
+        # RAPS (Regularized Adaptive Prediction Sets)
+        results[alpha]['RAPS'] = run_raps_algorithm(calib_probs, calib_labs, test_probs, test_labs, alpha)
+    
+    print("✅ All conformal algorithms completed")
+    return results
+
+def run_lac_algorithm(calib_probs, calib_labs, test_probs, test_labs, alpha):
+    """LAC Algorithm Implementation"""
+    print(f"  🔹 Running LAC with alpha={alpha}")
+    
+    # Calculate non-conformity scores on calibration set
+    n_calib = len(calib_probs)
+    calib_scores = 1 - calib_probs[range(n_calib), calib_labs]
+    
+    # Calculate quantile
+    q_level = np.ceil((n_calib + 1) * (1 - alpha)) / n_calib
+    q_hat = np.quantile(calib_scores.numpy(), q_level)
+    
+    # Generate prediction sets
+    prediction_sets = []
+    correct_coverage = 0
+    total_set_size = 0
+    
+    for i, test_prob in enumerate(test_probs):
+        # Calculate scores for all classes
+        scores = 1 - test_prob
+        
+        # Create prediction set
+        pred_set = torch.where(scores <= q_hat)[0].tolist()
+        if len(pred_set) == 0:  # Ensure non-empty set
+            pred_set = [torch.argmax(test_prob).item()]
+        
+        prediction_sets.append(pred_set)
+        total_set_size += len(pred_set)
+        
+        # Check coverage
+        if test_labs[i].item() in pred_set:
+            correct_coverage += 1
+    
+    coverage = correct_coverage / len(test_labs)
+    avg_set_size = total_set_size / len(test_labs)
+    
+    print(f"    ✓ LAC: Coverage={coverage:.3f}, Avg Size={avg_set_size:.2f}")
+    
+    return {
+        'coverage': coverage,
+        'avg_set_size': avg_set_size,
+        'prediction_sets': prediction_sets,
+        'method': 'LAC',
+        'alpha': alpha
+    }
+
+def run_aps_algorithm(calib_probs, calib_labs, test_probs, test_labs, alpha):
+    """APS Algorithm Implementation"""
+    print(f"  🔹 Running APS with alpha={alpha}")
+    
+    # Calculate non-conformity scores on calibration set
+    calib_scores = []
+    for i, (probs, label) in enumerate(zip(calib_probs, calib_labs)):
+        sorted_probs, sorted_indices = torch.sort(probs, descending=True)
+        cumsum_probs = torch.cumsum(sorted_probs, dim=0)
+        
+        # Find position of true label in sorted order
+        label_pos = torch.where(sorted_indices == label)[0][0]
+        score = cumsum_probs[label_pos].item()
+        calib_scores.append(score)
+    
+    calib_scores = np.array(calib_scores)
+    
+    # Calculate quantile
+    n_calib = len(calib_scores)
+    q_level = np.ceil((n_calib + 1) * (1 - alpha)) / n_calib
+    q_hat = np.quantile(calib_scores, q_level)
+    
+    # Generate prediction sets
+    prediction_sets = []
+    correct_coverage = 0
+    total_set_size = 0
+    
+    for i, test_prob in enumerate(test_probs):
+        sorted_probs, sorted_indices = torch.sort(test_prob, descending=True)
+        cumsum_probs = torch.cumsum(sorted_probs, dim=0)
+        
+        # Find prediction set
+        pred_set_mask = cumsum_probs <= q_hat
+        if not pred_set_mask.any():  # Ensure non-empty set
+            pred_set = [sorted_indices[0].item()]
+        else:
+            last_included = torch.where(pred_set_mask)[0][-1]
+            pred_set = sorted_indices[:last_included+1].tolist()
+        
+        prediction_sets.append(pred_set)
+        total_set_size += len(pred_set)
+        
+        # Check coverage
+        if test_labs[i].item() in pred_set:
+            correct_coverage += 1
+    
+    coverage = correct_coverage / len(test_labs)
+    avg_set_size = total_set_size / len(test_labs)
+    
+    print(f"    ✓ APS: Coverage={coverage:.3f}, Avg Size={avg_set_size:.2f}")
+    
+    return {
+        'coverage': coverage,
+        'avg_set_size': avg_set_size,
+        'prediction_sets': prediction_sets,
+        'method': 'APS',
+        'alpha': alpha
+    }
+
+def run_raps_algorithm(calib_probs, calib_labs, test_probs, test_labs, alpha):
+    """RAPS Algorithm Implementation"""
+    print(f"  🔹 Running RAPS with alpha={alpha}")
+    
+    lambda_reg = 0.1  # Regularization parameter
+    k_reg = 5         # Top-k parameter
+    
+    # Calculate regularized non-conformity scores on calibration set
+    calib_scores = []
+    for i, (probs, label) in enumerate(zip(calib_probs, calib_labs)):
+        sorted_probs, sorted_indices = torch.sort(probs, descending=True)
+        cumsum_probs = torch.cumsum(sorted_probs, dim=0)
+        
+        # Find position of true label
+        label_pos = torch.where(sorted_indices == label)[0][0]
+        
+        # Add regularization
+        regularization = lambda_reg * max(0, label_pos.item() - k_reg)
+        score = cumsum_probs[label_pos].item() + regularization
+        calib_scores.append(score)
+    
+    calib_scores = np.array(calib_scores)
+    
+    # Calculate quantile
+    n_calib = len(calib_scores)
+    q_level = np.ceil((n_calib + 1) * (1 - alpha)) / n_calib
+    q_hat = np.quantile(calib_scores, q_level)
+    
+    # Generate prediction sets
+    prediction_sets = []
+    correct_coverage = 0
+    total_set_size = 0
+    
+    for i, test_prob in enumerate(test_probs):
+        sorted_probs, sorted_indices = torch.sort(test_prob, descending=True)
+        cumsum_probs = torch.cumsum(sorted_probs, dim=0)
+        
+        # Find prediction set with regularization
+        pred_set = []
+        for j, (cum_prob, class_idx) in enumerate(zip(cumsum_probs, sorted_indices)):
+            regularization = lambda_reg * max(0, j - k_reg)
+            score = cum_prob.item() + regularization
+            
+            if score <= q_hat:
+                pred_set.append(class_idx.item())
+            else:
+                break
+        
+        if len(pred_set) == 0:  # Ensure non-empty set
+            pred_set = [sorted_indices[0].item()]
+        
+        prediction_sets.append(pred_set)
+        total_set_size += len(pred_set)
+        
+        # Check coverage
+        if test_labs[i].item() in pred_set:
+            correct_coverage += 1
+    
+    coverage = correct_coverage / len(test_labs)
+    avg_set_size = total_set_size / len(test_labs)
+    
+    print(f"    ✓ RAPS: Coverage={coverage:.3f}, Avg Size={avg_set_size:.2f}")
+    
+    return {
+        'coverage': coverage,
+        'avg_set_size': avg_set_size,
+        'prediction_sets': prediction_sets,
+        'method': 'RAPS',
+        'alpha': alpha
+    }
 
 def download_mapper_outputs():
     """
