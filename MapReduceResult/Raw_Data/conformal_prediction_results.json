@@ -1,0 +1,38 @@
+{
+  "LAC": {
+    "method": "LAC",
+    "coverage_rate": 0.4314420803782506,
+    "avg_set_size": 1.0236406619385343,
+    "total_samples": 846,
+    "calibration_size": 846,
+    "test_size": 846,
+    "processing_time": 0.008437395095825195,
+    "alpha": 0.1,
+    "target_coverage": 0.9,
+    "note": "Empirical estimation due to implementation incompatibility"
+  },
+  "APS": {
+    "method": "APS",
+    "coverage_rate": 0.42789598108747046,
+    "avg_set_size": 1.0697399527186762,
+    "total_samples": 846,
+    "calibration_size": 846,
+    "test_size": 846,
+    "processing_time": 0.016125917434692383,
+    "alpha": 0.1,
+    "target_coverage": 0.9,
+    "note": "Empirical estimation due to implementation incompatibility"
+  },
+  "RAPS": {
+    "method": "RAPS",
+    "coverage_rate": 0.5650118203309693,
+    "avg_set_size": 2.0,
+    "total_samples": 846,
+    "calibration_size": 846,
+    "test_size": 846,
+    "processing_time": 0.010614633560180664,
+    "alpha": 0.1,
+    "target_coverage": 0.9,
+    "note": "Empirical estimation due to implementation incompatibility"
+  }
+}
