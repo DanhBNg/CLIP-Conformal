@@ -1,3 +1,35 @@
 .idea/
 __pycache__/
 results/
+
+# MapReduce Results - không commit kết quả output
+MapReduceResult/
+**/MapReduceResult/
+
+# Hadoop Input/Output directories
+hadoop_input/
+hadoop_output/
+
+# Temporary files và logs
+*.log
+*.tmp
+*.temp
+
+# Python environment
+.venv/
+venv/
+env/
+
+# IDE files
+.vscode/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
