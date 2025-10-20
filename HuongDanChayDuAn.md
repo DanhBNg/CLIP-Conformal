@@ -1,12 +1,11 @@
 # 🎯 Hướng Dẫn Chạy Dự Án CLIP-Conformal Prediction
 
 ## 📋 Mục Đích Dự Án
-Dự án này sử dụng thuật toán **Conformal Prediction** để dự đoán texture (kết cấu bề mặt) của hình ảnh với độ tin cậy cao. Thay vì chỉ đưa ra 1 kết quả dự đoán, hệ thống sẽ đưa ra một **tập kết quả có thể** với mức độ tin cậy 90%.
+Dự án này sử dụng thuật toán **Conformal Prediction** để dự đoán texture (kết cấu bề mặt) của hình ảnh với độ tin cậy cao. Thay vì chỉ đưa ra 1 kết quả dự đoán, hệ thống sẽ đưa ra một **tập kết quả có thể** với mức độ tin cậy 90% hoặc 95%.
 
 **Ví dụ đơn giản**: 
 - Dự đoán thông thường: "Đây là texture gỗ" 
 - Conformal Prediction: "Đây có thể là texture gỗ hoặc vải, với độ tin cậy 90%"
-
 ---
 
 ## 📁 Cấu Trúc Dự Án MapReduce
@@ -36,9 +35,11 @@ CLIP-Conformal/
 │   └── 📄 split.py             # Data splitting utilities
 ├── 📁 MapReduceResult/         # FINAL OUTPUT (auto-generated)
 │   ├── 📁 Charts/              # Timestamped visualization folders
-│   │   └── 📁 [HHhmm_DD-MM-YYYY_charts]/ # Session-specific charts
+│   │   └── 📁 [HHhmm_DD-MM-YYYY_charts]/ # Session-specific charts (7 charts)
+│   ├── 📁 Reports/             # 🆕 Excel reports
+│   │   └── 📄 [HHhmm_YYYYMMDD.xlsx]      # Excel export với 4 sheets
 │   └── 📁 Raw_Data/            # JSON results storage
-│       └── � conformal_results_*.json   # Detailed results
+│       └── 📄 conformal_results_*.json   # Detailed results (dual-alpha)
 └── 📄 HuongDanChayDuAn.md     # This guide
 ```
 
@@ -49,8 +50,9 @@ CLIP-Conformal/
 | **Stage 1** | `prepare_data.py` | DTD images (5,640) | Chunks (4×1,410) | Data chunking & preparation |
 | **Stage 2** | `clip_mapper.py` | Data chunks | CLIP logits | Parallel CLIP-ViT-B/32 encoding |
 | **Stage 3** | `main.py` | Mapper outputs | Sorted data | Shuffle & sort aggregation |
-| **Stage 4** | `conformal_reducer.py` | Aggregated data | CP results | LAC/APS/RAPS algorithms |
-| **Visualization** | `draw_charts.py` | CP results | Charts | Real-time visualization |
+| **Stage 4** | `conformal_reducer.py` | Aggregated data | CP results | LAC/APS/RAPS algorithms (dual-alpha) |
+| **Visualization** | `draw_charts.py` | CP results | Charts | Real-time visualization (7 charts) |
+| **🆕 Export** | `main.py` | CP results | Excel | Research-ready Excel export |
 
 ---
 
@@ -193,26 +195,79 @@ Sau khi chạy xong, bạn sẽ có:
 ```
 ================================================================================
 🎉 MAPREDUCE PIPELINE COMPLETED SUCCESSFULLY
-⏱️  Total processing time: 169.04 seconds
-⏱️  Data prep: 2.474s
-⏱️  Map phase: 303.204s (CLIP encoding)
-⏱️  Shuffle/Sort: 0.225s
-⏱️  Reduce phase: 4.498s
+⏱️  Total processing time: 174.43 seconds
+⏱️  Data prep: 1.128s
+⏱️  Map phase: 171.791s (CLIP encoding)
+⏱️  Shuffle/Sort: 0.164s
+⏱️  Reduce phase: 1.350s
 ================================================================================
 
-📊 CONFORMAL PREDICTION RESULTS SUMMARY:
-✅ LAC : Coverage=91.3%, Size=12.2, Runtime=0.70s
-✅ APS : Coverage=95.4%, Size=19.0, Runtime=1.40s  
-✅ RAPS: Coverage=90.4%, Size=12.9, Runtime=1.75s
+📊 CONFORMAL PREDICTION RESULTS TABLE
+================================================================================
+Method       α = 0.10                       CCV↓ α = 0.05              CCV↓
+               Top-1↑     Cov.    Size↓              Cov.    Size↓
+--------------------------------------------------------------------------------
+LAC              42.0    0.913     12.2     0.09    0.957     18.4     0.05
+APS              42.0    0.954     19.0     0.08    0.984     25.1     0.04
+RAPS             42.0    0.904     12.9     0.09    0.951     18.8     0.05
+================================================================================
+Notes:
+- Top-1↑: Higher is better (accuracy)
+- Cov.: Coverage rate (should be ≥ 1-α)
+- Size↓: Average prediction set size (lower is better)
+- CCV↓: Conditional Coverage Violation (lower is better)
+================================================================================
 
-[+] Results saved in: MapReduceResult/Raw_Data/
-[+] Charts created in: MapReduceResult/Charts/11h32am_18-10-2025_charts/
+📊 EXPORTING RESULTS TO EXCEL
+----------------------------------------
+✅ Excel file created: C:\BigData\CLIP-Conformal\MapReduceResult\Reports\11h32am_20251020.xlsx
+📁 Location: C:\BigData\CLIP-Conformal\MapReduceResult\Reports
+📊 Sheets: Research_Comparison, Summary, Detailed_Results, Metadata
+
+[+] Results saved in: MapReduceResult/Raw_Data/conformal_results_20251020_113224.json
+[+] Charts created in: MapReduceResult/Charts/11h32am_20-10-2025_charts/
 ```
 
-**Giải thích**:
-- **LAC**: Đơn giản, nhanh (0.70s), coverage tốt (91.3%), set size nhỏ (12.2)
-- **APS**: Coverage cao nhất (95.4%) nhưng set size lớn (19.0)  
-- **RAPS**: Cân bằng tốt, complexity cao nhất (1.75s)
+**Giải thích Kết Quả**:
+- **LAC**: Đơn giản, nhanh, coverage tốt cho cả 2 alpha (91.3%→95.7%)
+- **APS**: Coverage cao nhất (95.4%→98.4%) nhưng set size lớn nhất
+- **RAPS**: Cân bằng tốt, ổn định với CCV thấp
+
+### 🆕 Output Files Chi Tiết
+
+#### 📁 MapReduceResult/Reports/[timestamp].xlsx
+**4 Excel Sheets được tạo**:
+1. **Research_Comparison**: Bảng so sánh theo format nghiên cứu khoa học
+2. **Summary**: Tóm tắt chi tiết với status và phân tích  
+3. **Detailed_Results**: Dữ liệu raw cho phân tích thống kê
+4. **Metadata**: Thông tin về dataset, model, pipeline settings
+
+#### 📁 MapReduceResult/Charts/[timestamp]_charts/
+**7 Biểu Đồ Visualization**:
+1. `01_coverage_rate_comparison.png` - So sánh coverage rate
+2. `02_average_setsize_comparison.png` - So sánh kích thước prediction sets
+3. `03_processing_time_comparison.png` - So sánh thời gian xử lý
+4. `04_coverage_setsize_tradeoff.png` - Trade-off coverage vs set size
+5. `05_temperature_scaling_analysis.png` - Phân tích temperature scaling
+6. `06_runtime_breakdown_analysis.png` - Phân tích chi tiết runtime
+7. `08_coverage_convergence.png` - Phân tích hội tụ coverage
+
+#### 📄 MapReduceResult/Raw_Data/conformal_results_[timestamp].json
+**Structure JSON**:
+```json
+{
+  "0.1": {
+    "LAC": {"coverage": 0.913, "avg_set_size": 12.17, "ccv": 0.09, ...},
+    "APS": {"coverage": 0.954, "avg_set_size": 18.99, "ccv": 0.08, ...},
+    "RAPS": {"coverage": 0.904, "avg_set_size": 12.88, "ccv": 0.09, ...}
+  },
+  "0.05": {
+    "LAC": {"coverage": 0.957, "avg_set_size": 18.38, "ccv": 0.05, ...},
+    "APS": {"coverage": 0.984, "avg_set_size": 25.11, "ccv": 0.04, ...},
+    "RAPS": {"coverage": 0.951, "avg_set_size": 18.76, "ccv": 0.05, ...}
+  }
+}
+```
 
 ---
 
@@ -224,6 +279,12 @@ Sau khi chạy xong, bạn sẽ có:
 pip install torch numpy pandas matplotlib openpyxl
 ```
 
+### 🆕 ❌ Lỗi: "pandas not available for Excel export"
+```bash
+# Cài đặt pandas và openpyxl cho Excel export
+pip install pandas openpyxl
+```
+
 ### ❌ Lỗi: "File not found"  
 ```bash
 # Đảm bảo bạn ở đúng thư mục
@@ -231,22 +292,46 @@ cd C:\BigData\CLIP-Conformal
 pwd  # Kiểm tra đường dẫn hiện tại
 ```
 
+### 🆕 ❌ Lỗi: "Excel file already open"
+```bash
+# Đóng file Excel đang mở trong Microsoft Excel
+# Hoặc đổi tên file trong function export_results_to_excel()
+```
+
 ### ❌ Lỗi: "Permission denied"
 ```bash
 # Chạy với quyền admin hoặc thay đổi quyền thư mục
+```
+
+### 🆕 ❌ Charts không được tạo
+```bash
+# Kiểm tra matplotlib backend
+pip install matplotlib
+# Nếu vẫn lỗi, kiểm tra đường dẫn output_dir trong draw_charts.py
 ```
 
 ---
 
 ## 🎯 Tùy Chỉnh Tham Số
 
-### Thay Đổi Độ Tin Cậy
-Trong file `main.py`, tìm dòng:
+### 🆕 Thay Đổi Alpha Values (Dual-Alpha Testing)
+Trong file `conformal_reducer.py`, tìm dòng:
 ```python
-alpha = 0.1  # Độ tin cậy 90% (1 - 0.1)
+alpha_values = [0.1, 0.05]  # α = 0.10 (90% coverage) và α = 0.05 (95% coverage)
 ```
-- `alpha = 0.05` → Độ tin cậy 95%
-- `alpha = 0.2` → Độ tin cậy 80%
+**Tùy chỉnh**:
+- `[0.1]` → Chỉ test α = 0.10 (90% confidence)
+- `[0.05]` → Chỉ test α = 0.05 (95% confidence)  
+- `[0.1, 0.05, 0.01]` → Test 3 alpha values (90%, 95%, 99% confidence)
+
+### Thay Đổi Excel Export Format
+Trong file `main.py`, function `export_results_to_excel()`:
+```python
+# Tùy chỉnh filename format
+excel_filename = f"{hour}h{minute}{ampm}_{date}.xlsx"
+# Có thể thay đổi thành:
+excel_filename = f"conformal_results_{date}_{hour}{minute}.xlsx"
+```
 
 ### Thay Đổi Dataset
 ```python
@@ -273,6 +358,28 @@ split_ratio = 0.5  # 50% calibration, 50% test
 
 ---
 
+## 🆕 Giải Thích Metrics Mới
+
+### 📊 Enhanced Metrics Table
+| Metric | Ký Hiệu | Giải Thích | Mục Tiêu |
+|--------|---------|------------|----------|
+| **Top-1 Accuracy** | Top-1↑ | Độ chính xác dự đoán đơn | Càng cao càng tốt |
+| **Coverage Rate** | Cov. | Tỷ lệ true label nằm trong prediction set | ≥ (1-α) |
+| **Average Set Size** | Size↓ | Kích thước trung bình prediction set | Càng nhỏ càng tốt |
+| **CCV** | CCV↓ | Conditional Coverage Violation | Càng thấp càng tốt |
+
+### 🎯 Dual-Alpha Comparison
+- **α = 0.10**: Target coverage 90% - Nhanh, set size nhỏ, ít conservative
+- **α = 0.05**: Target coverage 95% - Chậm hơn, set size lớn hơn, conservative hơn
+
+### 📈 Performance Interpretation
+**Ideal Method**: High Top-1↑, Coverage ≥ target, Low Size↓, Low CCV↓
+- **LAC**: Tốt cho applications cần tốc độ
+- **APS**: Tốt cho applications cần coverage cao  
+- **RAPS**: Cân bằng tốt giữa coverage và efficiency
+
+---
+
 ## 📚 Thuật Ngữ Đơn Giản
 
 | Thuật ngữ | Giải thích đơn giản |
@@ -282,6 +389,10 @@ split_ratio = 0.5  # 50% calibration, 50% test
 | **Set Size** | Số lượng đáp án có thể trong mỗi dự đoán |
 | **Calibration** | Quá trình "học" để hiểu độ tin cậy |
 | **DTD Dataset** | Bộ dữ liệu 47 loại texture khác nhau |
+| **🆕 Top-1 Accuracy** | Độ chính xác dự đoán lựa chọn đầu tiên |
+| **🆕 CCV** | Mức độ vi phạm coverage theo từng class |
+| **🆕 Dual-Alpha** | Kiểm thử với 2 mức độ tin cậy (90% & 95%) |
+| **🆕 Excel Export** | Xuất kết quả ra file Excel đa sheet |
 
 ---
 

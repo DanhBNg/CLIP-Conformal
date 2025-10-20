@@ -49,6 +49,38 @@ def aggregate_mapper_outputs(sorted_outputs):
     
     return combined_logits, combined_labels
 
+def calculate_ccv(prediction_sets, test_labels, alpha):
+    """
+    Calculate Conditional Coverage Violation (CCV)
+    CCV measures how much the conditional coverage deviates from the target coverage
+    """
+    n_test = len(test_labels)
+    target_coverage = 1 - alpha
+    
+    # Group by true labels to calculate conditional coverage
+    unique_labels = torch.unique(test_labels)
+    ccv_violations = []
+    
+    for label in unique_labels:
+        label_mask = test_labels == label
+        label_indices = torch.where(label_mask)[0]
+        
+        if len(label_indices) == 0:
+            continue
+            
+        # Calculate coverage for this specific label
+        correct_for_label = 0
+        for idx in label_indices:
+            if test_labels[idx].item() in prediction_sets[idx]:
+                correct_for_label += 1
+        
+        conditional_coverage = correct_for_label / len(label_indices)
+        violation = abs(conditional_coverage - target_coverage)
+        ccv_violations.append(violation)
+    
+    # Return average violation across all classes
+    return np.mean(ccv_violations) if ccv_violations else 0.0
+
 def run_conformal_algorithms(calib_logits, calib_labels, test_logits, test_labels):
     """
     Chạy các thuật toán Conformal Prediction: LAC, APS, RAPS
@@ -56,7 +88,12 @@ def run_conformal_algorithms(calib_logits, calib_labels, test_logits, test_label
     print("🎯 Running Conformal Prediction algorithms...")
     
     results = {}
-    alpha_values = [0.1, 0.05, 0.2]  # Different confidence levels
+    alpha_values = [0.1, 0.05]  # α = 0.10 and α = 0.05 for comparison table
+    
+    # Calculate Top-1 accuracy first (independent of alpha)
+    test_preds_top1 = np.argmax(test_logits, axis=1)
+    top1_accuracy = np.mean(test_preds_top1 == test_labels) * 100
+    print(f"📊 Top-1 Accuracy: {top1_accuracy:.1f}%")
     
     for alpha in alpha_values:
         print(f"\n🔍 Testing with alpha={alpha} (target coverage: {1-alpha:.1%})")
@@ -74,12 +111,15 @@ def run_conformal_algorithms(calib_logits, calib_labels, test_logits, test_label
         
         # LAC (Least Ambiguous Conformal)
         results[alpha]['LAC'] = run_lac_algorithm(calib_probs, calib_labs, test_probs, test_labs, alpha)
+        results[alpha]['LAC']['top1_accuracy'] = top1_accuracy
         
         # APS (Adaptive Prediction Sets)
         results[alpha]['APS'] = run_aps_algorithm(calib_probs, calib_labs, test_probs, test_labs, alpha)
+        results[alpha]['APS']['top1_accuracy'] = top1_accuracy
         
         # RAPS (Regularized Adaptive Prediction Sets)
         results[alpha]['RAPS'] = run_raps_algorithm(calib_probs, calib_labs, test_probs, test_labs, alpha)
+        results[alpha]['RAPS']['top1_accuracy'] = top1_accuracy
     
     print("✅ All conformal algorithms completed")
     return results
@@ -120,11 +160,15 @@ def run_lac_algorithm(calib_probs, calib_labs, test_probs, test_labs, alpha):
     coverage = correct_coverage / len(test_labs)
     avg_set_size = total_set_size / len(test_labs)
     
-    print(f"    ✓ LAC: Coverage={coverage:.3f}, Avg Size={avg_set_size:.2f}")
+    # Calculate CCV (Conditional Coverage Violation)
+    ccv = calculate_ccv(prediction_sets, test_labs, alpha)
+    
+    print(f"    ✓ LAC: Coverage={coverage:.3f}, Avg Size={avg_set_size:.2f}, CCV={ccv:.2f}")
     
     return {
         'coverage': coverage,
         'avg_set_size': avg_set_size,
+        'ccv': ccv,
         'prediction_sets': prediction_sets,
         'method': 'LAC',
         'alpha': alpha
@@ -179,11 +223,15 @@ def run_aps_algorithm(calib_probs, calib_labs, test_probs, test_labs, alpha):
     coverage = correct_coverage / len(test_labs)
     avg_set_size = total_set_size / len(test_labs)
     
-    print(f"    ✓ APS: Coverage={coverage:.3f}, Avg Size={avg_set_size:.2f}")
+    # Calculate CCV (Conditional Coverage Violation)
+    ccv = calculate_ccv(prediction_sets, test_labs, alpha)
+    
+    print(f"    ✓ APS: Coverage={coverage:.3f}, Avg Size={avg_set_size:.2f}, CCV={ccv:.2f}")
     
     return {
         'coverage': coverage,
         'avg_set_size': avg_set_size,
+        'ccv': ccv,
         'prediction_sets': prediction_sets,
         'method': 'APS',
         'alpha': alpha
@@ -250,11 +298,15 @@ def run_raps_algorithm(calib_probs, calib_labs, test_probs, test_labs, alpha):
     coverage = correct_coverage / len(test_labs)
     avg_set_size = total_set_size / len(test_labs)
     
-    print(f"    ✓ RAPS: Coverage={coverage:.3f}, Avg Size={avg_set_size:.2f}")
+    # Calculate CCV (Conditional Coverage Violation)
+    ccv = calculate_ccv(prediction_sets, test_labs, alpha)
+    
+    print(f"    ✓ RAPS: Coverage={coverage:.3f}, Avg Size={avg_set_size:.2f}, CCV={ccv:.2f}")
     
     return {
         'coverage': coverage,
         'avg_set_size': avg_set_size,
+        'ccv': ccv,
         'prediction_sets': prediction_sets,
         'method': 'RAPS',
         'alpha': alpha
@@ -845,6 +897,57 @@ def main():
     for method, result in results.items():
         print(f"  {method}: Coverage={result['coverage_rate']:.3f}, "
               f"Set Size={result['avg_set_size']:.2f}", file=sys.stderr)
+
+def create_results_table(results):
+    """
+    Create a formatted table like the research paper format
+    with Top-1, Coverage, Size, and CCV for α = 0.10 and α = 0.05
+    """
+    print("\n" + "="*80)
+    print("📊 CONFORMAL PREDICTION RESULTS TABLE")
+    print("="*80)
+    
+    # Header
+    print("{:<12} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}".format(
+        "Method", "α = 0.10", "", "", "CCV↓", "α = 0.05", "", "CCV↓"
+    ))
+    print("{:<12} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}".format(
+        "", "Top-1↑", "Cov.", "Size↓", "", "Cov.", "Size↓", ""
+    ))
+    print("-" * 80)
+    
+    methods = ['LAC', 'APS', 'RAPS']
+    
+    for method in methods:
+        if 0.1 in results and method in results[0.1]:
+            # α = 0.10 results
+            result_010 = results[0.1][method]
+            top1_010 = result_010['top1_accuracy']
+            cov_010 = result_010['coverage']
+            size_010 = result_010['avg_set_size']
+            ccv_010 = result_010['ccv']
+            
+            # α = 0.05 results  
+            result_005 = results[0.05][method] if 0.05 in results else None
+            if result_005:
+                cov_005 = result_005['coverage']
+                size_005 = result_005['avg_set_size']
+                ccv_005 = result_005['ccv']
+            else:
+                cov_005 = size_005 = ccv_005 = 0
+            
+            print("{:<12} {:>8.1f} {:>8.3f} {:>8.1f} {:>8.2f} {:>8.3f} {:>8.1f} {:>8.2f}".format(
+                method, top1_010, cov_010, size_010, ccv_010, 
+                cov_005, size_005, ccv_005
+            ))
+    
+    print("="*80)
+    print("Notes:")
+    print("- Top-1↑: Higher is better (accuracy)")
+    print("- Cov.: Coverage rate (should be ≥ 1-α)")
+    print("- Size↓: Average prediction set size (lower is better)")
+    print("- CCV↓: Conditional Coverage Violation (lower is better)")
+    print("="*80)
     
     print("✅ Reducer completed successfully", file=sys.stderr)
 

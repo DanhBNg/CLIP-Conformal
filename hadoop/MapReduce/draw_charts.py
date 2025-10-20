@@ -517,7 +517,7 @@ def cleanup_old_chart_sessions(charts_dir, keep_last_n=5):
             print(f'[+] Deleted old chart session: {session}')
 
 
-def create_visualization_charts(results, texture_classes):
+def create_visualization_charts(results, texture_classes, output_dir=None):
     """
     Main function để tạo tất cả visualization charts
     Handles both old format {method: {...}} và new format {alpha: {method: {...}}}
@@ -550,8 +550,13 @@ def create_visualization_charts(results, texture_classes):
         methods_data['_stage_times'] = stage_times
         print(f"  ⏱️  Real timing data available: {stage_times}")
     
+    # Use provided output_dir or default to relative path
+    if output_dir is None:
+        output_dir = Path("../../MapReduceResult")
+    else:
+        output_dir = Path(output_dir)
+    
     # Create charts directory
-    output_dir = Path("../../MapReduceResult")
     charts_dir = output_dir / "Charts"
     charts_dir.mkdir(parents=True, exist_ok=True)
     

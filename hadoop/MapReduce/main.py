@@ -15,6 +15,14 @@ sys.path.append(str(project_root))
 from conformal.conformal_methods import lac, aps, raps
 from conformal.metrics import evaluate_conformal, accuracy
 
+# Import pandas for Excel export
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except ImportError:
+    PANDAS_AVAILABLE = False
+    print("⚠️  pandas not available for Excel export")
+
 # Import chart generation functions
 try:
     from draw_charts import create_visualization_charts
@@ -526,6 +534,145 @@ def create_results_summary(results, texture_classes):
     print("✅ Results summary created")
     return summary
 
+def export_results_to_excel(results, output_dir):
+    """
+    Export results to Excel with formatted tables
+    """
+    if not PANDAS_AVAILABLE:
+        print("⚠️  pandas not available, skipping Excel export")
+        return None
+    
+    print("\n📊 EXPORTING RESULTS TO EXCEL")
+    print("-" * 40)
+    
+    try:
+        # Create Reports directory
+        reports_dir = output_dir / 'Reports'
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Generate timestamp for filename: 11h17pm_20252010.xlsx
+        now = datetime.now()
+        hour = now.strftime('%I')  # 12-hour format
+        minute = now.strftime('%M')
+        ampm = now.strftime('%p').lower()  # am/pm
+        date = now.strftime('%Y%m%d')  # YYYYMMDD format
+        excel_filename = f"{hour}h{minute}{ampm}_{date}.xlsx"
+        excel_file = reports_dir / excel_filename
+        
+        # Prepare data for Excel sheets
+        summary_data = []
+        detailed_data = []
+        
+        # Extract data for both alpha values
+        for alpha, methods in results.items():
+            if alpha == '_stage_times':  # Skip timing data
+                continue
+                
+            alpha_val = float(alpha)
+            target_coverage = 1 - alpha_val
+            
+            for method, data in methods.items():
+                # Summary table (research paper format)
+                summary_data.append({
+                    'Alpha': f"α = {alpha_val:.2f}",
+                    'Method': method,
+                    'Top-1 Accuracy (%)': f"{data['top1_accuracy']:.1f}",
+                    'Coverage Rate': f"{data['coverage']:.3f}",
+                    'Target Coverage': f"{target_coverage:.3f}",
+                    'Coverage (%)': f"{data['coverage']*100:.1f}%",
+                    'Avg Set Size': f"{data['avg_set_size']:.1f}",
+                    'CCV': f"{data['ccv']:.2f}",
+                    'Status': "✓" if data['coverage'] >= target_coverage * 0.95 else "⚠️"
+                })
+                
+                # Detailed data
+                detailed_data.append({
+                    'Alpha': alpha_val,
+                    'Method': method,
+                    'Coverage': data['coverage'],
+                    'Avg_Set_Size': data['avg_set_size'],
+                    'CCV': data['ccv'],
+                    'Top1_Accuracy': data['top1_accuracy'],
+                    'Target_Coverage': target_coverage,
+                    'Total_Prediction_Sets': len(data.get('prediction_sets', [])),
+                    'Alpha_Value': alpha_val
+                })
+        
+        # Create DataFrames
+        summary_df = pd.DataFrame(summary_data)
+        detailed_df = pd.DataFrame(detailed_data)
+        
+        # Create comparison table (like research paper)
+        comparison_data = []
+        methods = ['LAC', 'APS', 'RAPS']
+        
+        for method in methods:
+            if 0.1 in results and method in results[0.1]:
+                result_010 = results[0.1][method]
+                result_005 = results[0.05][method] if 0.05 in results and method in results[0.05] else None
+                
+                row = {
+                    'Method': method,
+                    'α=0.10_Top1': f"{result_010['top1_accuracy']:.1f}",
+                    'α=0.10_Coverage': f"{result_010['coverage']:.3f}",
+                    'α=0.10_Size': f"{result_010['avg_set_size']:.1f}",
+                    'α=0.10_CCV': f"{result_010['ccv']:.2f}",
+                }
+                
+                if result_005:
+                    row.update({
+                        'α=0.05_Coverage': f"{result_005['coverage']:.3f}",
+                        'α=0.05_Size': f"{result_005['avg_set_size']:.1f}",
+                        'α=0.05_CCV': f"{result_005['ccv']:.2f}",
+                    })
+                else:
+                    row.update({
+                        'α=0.05_Coverage': "N/A",
+                        'α=0.05_Size': "N/A", 
+                        'α=0.05_CCV': "N/A",
+                    })
+                
+                comparison_data.append(row)
+        
+        comparison_df = pd.DataFrame(comparison_data)
+        
+        # Write to Excel with multiple sheets
+        with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
+            # Sheet 1: Research Paper Format Comparison
+            comparison_df.to_excel(writer, sheet_name='Research_Comparison', index=False)
+            
+            # Sheet 2: Summary Table
+            summary_df.to_excel(writer, sheet_name='Summary', index=False)
+            
+            # Sheet 3: Detailed Results
+            detailed_df.to_excel(writer, sheet_name='Detailed_Results', index=False)
+            
+            # Sheet 4: Metadata
+            metadata = {
+                'Generated_Date': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')],
+                'Total_Samples': [len(results[0.1]['LAC'].get('prediction_sets', []))],
+                'Dataset': ['DTD Texture Dataset'],
+                'Model': ['CLIP ViT-B/32'],
+                'Alpha_Values_Tested': ['0.10, 0.05'],
+                'Methods': ['LAC, APS, RAPS'],
+                'Pipeline': ['Hadoop MapReduce'],
+                'Results_File': [excel_filename]
+            }
+            metadata_df = pd.DataFrame(metadata)
+            metadata_df.to_excel(writer, sheet_name='Metadata', index=False)
+        
+        print(f"✅ Excel file created: {excel_file}")
+        print(f"📁 Location: {reports_dir}")
+        print(f"📊 Sheets: Research_Comparison, Summary, Detailed_Results, Metadata")
+        
+        return excel_file
+        
+    except Exception as e:
+        print(f"❌ Error creating Excel file: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
 def main():
     """Main function chạy MapReduce pipeline thay vì load cache"""
     print('=' * 60)
@@ -539,8 +686,9 @@ def main():
         # Run MapReduce pipeline thay vì load_dtd_data()
         results, texture_classes = mapreduce_orchestrator()
         
-        # Save results to original MapReduceResult directory
-        output_dir = Path('../../MapReduceResult')
+        # Save results to original MapReduceResult directory (at project root)
+        project_root = Path(__file__).parent.parent.parent  # Go up from hadoop/mapreduce to project root
+        output_dir = project_root / 'MapReduceResult'
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Create Raw_Data subdirectory for JSON results
@@ -577,7 +725,14 @@ def main():
         # Generate visualization charts using real results
         print("\n📊 GENERATING VISUALIZATION CHARTS")
         print("-" * 40)
-        create_visualization_charts(summary, texture_classes)
+        create_visualization_charts(summary, texture_classes, output_dir=output_dir)
+        
+        # Import and call the results table function
+        from conformal_reducer import create_results_table
+        create_results_table(results)
+        
+        # Export results to Excel
+        excel_file = export_results_to_excel(results, output_dir)
         
         # Print summary
         print(f'\n{"="*60}')
