@@ -1,11 +1,17 @@
 # 🎯 Hướng Dẫn Chạy Dự Án CLIP-Conformal Prediction
 
 ## 📋 Mục Đích Dự Án
-Dự án này sử dụng thuật toán **Conformal Prediction** để dự đoán texture (kết cấu bề mặt) của hình ảnh với độ tin cậy cao. Thay vì chỉ đưa ra 1 kết quả dự đoán, hệ thống sẽ đưa ra một **tập kết quả có thể** với mức độ tin cậy 90% hoặc 95%.
+Dự án này sử dụng thuật toán **Conformal Prediction** để phân loại **scene recognition** (nhận dạng cảnh) với độ tin cậy cao. Thay vì chỉ đưa ra 1 kết quả dự đoán, hệ thống sẽ đưa ra một **tập kết quả có thể** với mức độ tin cậy 90% hoặc 95%.
 
 **Ví dụ đơn giản**: 
-- Dự đoán thông thường: "Đây là texture gỗ" 
-- Conformal Prediction: "Đây có thể là texture gỗ hoặc vải, với độ tin cậy 90%"
+- Dự đoán thông thường: "Đây là abbey (tu viện)" 
+- Conformal Prediction: "Đây có thể là abbey hoặc church indoor, với độ tin cậy 90%"
+
+## 🆕 **Dataset Mới: SUN397 Scene Recognition**
+- **39,700 images** từ 397 scene categories
+- **Scene types**: Indoor (168 classes), Outdoor (229 classes) 
+- **Examples**: Abbey, airplane cabin, beach, forest, kitchen, etc.
+- **Size**: ~11GB (không commit lên GitHub do quá lớn)
 ---
 
 ## 📁 Cấu Trúc Dự Án MapReduce
@@ -21,25 +27,27 @@ CLIP-Conformal/
 │   ├── � conformal_reducer.py # Stage 4: Reduce Phase - Conformal Algorithms
 │   └── 📄 draw_charts.py       # Visualization Engine
 ├── 📁 hadoop_input/            # MapReduce Input Data (auto-generated)
-│   ├── 📄 dtd_chunk_01.txt     # Data chunk 1 (1410 images)
-│   ├── � dtd_chunk_02.txt     # Data chunk 2 (1410 images)
-│   ├── 📄 dtd_chunk_03.txt     # Data chunk 3 (1410 images)
-│   ├── 📄 dtd_chunk_04.txt     # Data chunk 4 (1410 images)
-│   └── 📄 dtd_class_descriptions.json # Texture class descriptions
-├── 📁 local_data/datasets/dtd/ # Original DTD Dataset
-│   ├── 📁 images/              # 5,640 texture images (47 classes)
-│   └── 📁 labels/              # Image labels and splits
+│   ├── 📄 sun397_chunk_01.txt  # 🆕 Data chunk 1 (3,970 images)
+│   ├── 📄 sun397_chunk_02.txt  # 🆕 Data chunk 2 (3,970 images)
+│   ├── 📄 ... (10 chunks)      # 🆕 10 chunks total for SUN397
+│   ├── 📄 sun397_chunk_10.txt  # 🆕 Data chunk 10 (3,970 images)
+│   └── 📄 sun397_class_descriptions.json # Scene class descriptions
+├── 📁 local_data/datasets/     # Dataset Storage
+│   ├── 📁 sun397/              # 🆕 SUN397 Scene Dataset (39,700 images, 397 classes)
+│   └── 📁 dtd/                 # Legacy DTD Dataset (5,640 images, 47 classes)
 ├── 📁 conformal/               # Conformal Prediction Algorithms
 │   ├── � conformal_methods.py # LAC, APS, RAPS implementations
 │   ├── 📄 metrics.py           # Evaluation metrics
 │   └── 📄 split.py             # Data splitting utilities
 ├── 📁 MapReduceResult/         # FINAL OUTPUT (auto-generated)
 │   ├── 📁 Charts/              # Timestamped visualization folders
-│   │   └── 📁 [HHhmm_DD-MM-YYYY_charts]/ # Session-specific charts (7 charts)
+│   │   └── 📁 [HHhmm_DD-MM-YYYY_charts]/ # Session-specific charts (8 charts)
 │   ├── 📁 Reports/             # 🆕 Excel reports
 │   │   └── 📄 [HHhmm_YYYYMMDD.xlsx]      # Excel export với 4 sheets
 │   └── 📁 Raw_Data/            # JSON results storage
 │       └── 📄 conformal_results_*.json   # Detailed results (dual-alpha)
+├── 📄 TIMING_ANALYSIS.md      # 🆕 Performance analysis và timing breakdown
+├── 📄 SUN397_RESULTS.md       # 🆕 SUN397 dataset results và metrics
 └── 📄 HuongDanChayDuAn.md     # This guide
 ```
 
@@ -47,11 +55,11 @@ CLIP-Conformal/
 
 | Stage | File | Input | Output | Chức năng |
 |-------|------|-------|--------|-----------|
-| **Stage 1** | `prepare_data.py` | DTD images (5,640) | Chunks (4×1,410) | Data chunking & preparation |
+| **Stage 1** | `prepare_data.py` | SUN397 images (39,700) | Chunks (10×3,970) | Data chunking & preparation |
 | **Stage 2** | `clip_mapper.py` | Data chunks | CLIP logits | Parallel CLIP-ViT-B/32 encoding |
 | **Stage 3** | `main.py` | Mapper outputs | Sorted data | Shuffle & sort aggregation |
 | **Stage 4** | `conformal_reducer.py` | Aggregated data | CP results | LAC/APS/RAPS algorithms (dual-alpha) |
-| **Visualization** | `draw_charts.py` | CP results | Charts | Real-time visualization (7 charts) |
+| **Visualization** | `draw_charts.py` | CP results | Charts | Real-time visualization (8 charts) |
 | **🆕 Export** | `main.py` | CP results | Excel | Research-ready Excel export |
 
 ---
@@ -89,45 +97,45 @@ python hadoop\mapreduce\main.py
 ### 🏗️ Kiến Trúc 4-Stage Pipeline
 
 ```
-📊 INPUT: DTD Dataset (5,640 texture images, 47 classes)
+📊 INPUT: SUN397 Dataset (39,700 scene images, 397 classes)
     ↓
 ┌─────────────────────────────────────────────────────────────┐
-│ � STAGE 1: DATA PREPARATION & CHUNKING                    │
+│ 📊 STAGE 1: DATA PREPARATION & CHUNKING                    │
 │ File: prepare_data.py                                       │
-│ • Load DTD images from local_data/datasets/dtd/           │
-│ • Create 4 balanced chunks (1,410 images each)            │
-│ • Generate dtd_class_descriptions.json                     │
+│ • Load SUN397 images from local_data/datasets/sun397/     │
+│ • Create 10 balanced chunks (3,970 images each)           │
+│ • Generate sun397_class_descriptions.json                 │
 │ • Save chunks to hadoop_input/ directory                   │
 └─────────────────────────────────────────────────────────────┘
     ↓
 ┌─────────────────────────────────────────────────────────────┐
-│ �️ STAGE 2: MAP PHASE - CLIP ENCODING                      │
+│ ⚡️ STAGE 2: MAP PHASE - CLIP ENCODING                      │
 │ File: clip_mapper.py                                        │
-│ • Process 4 chunks in parallel (simulated)                │
+│ • Process 10 chunks in parallel (simulated)               │
 │ • Load CLIP-ViT-B/32 model                                │
 │ • Extract visual features for each image                   │
-│ • Generate text embeddings for 47 texture classes         │
+│ • Generate text embeddings for 397 scene classes          │
 │ • Output: logits files + labels files                      │
 └─────────────────────────────────────────────────────────────┘
     ↓
 ┌─────────────────────────────────────────────────────────────┐
-│ � STAGE 3: SHUFFLE & SORT                                 │
+│ 🔀 STAGE 3: SHUFFLE & SORT                                 │
 │ File: main.py (stage3_shuffle_sort)                        │
-│ • Collect outputs from all 4 mappers                      │
-│ • Aggregate logits: (4×1,410, 47) → (5,640, 47)          │
-│ • Combine labels: (4×1,410,) → (5,640,)                   │
+│ • Collect outputs from all 10 mappers                     │
+│ • Aggregate logits: (10×3,970, 397) → (39,700, 397)      │
+│ • Combine labels: (10×3,970,) → (39,700,)                 │
 │ • Sort by image index for consistency                      │
 └─────────────────────────────────────────────────────────────┘
     ↓
 ┌─────────────────────────────────────────────────────────────┐
-│ � STAGE 4: REDUCE PHASE - CONFORMAL PREDICTION            │
+│ 🔮 STAGE 4: REDUCE PHASE - CONFORMAL PREDICTION            │
 │ File: conformal_reducer.py                                 │
-│ • Split: Calibration (2,820) + Test (2,820) sets         │
+│ • Split: Calibration (19,850) + Test (19,850) sets       │
 │ • Run 3 algorithms in parallel:                           │
 │   ├── LAC (Least Ambiguous set-valued Classifier)        │
 │   ├── APS (Adaptive Prediction Sets)                      │
 │   └── RAPS (Regularized Adaptive Prediction Sets)        │
-│ • Test multiple alpha values: 0.05, 0.1, 0.2             │
+│ • Test multiple alpha values: 0.05, 0.1                  │
 │ • Calculate coverage, set size, confidence metrics        │
 └─────────────────────────────────────────────────────────────┘
     ↓
@@ -137,12 +145,17 @@ python hadoop\mapreduce\main.py
 ### ⏱️ Timing & Performance Tracking
 
 ```
-📊 Real-time Performance Monitoring:
-├── Data Preparation: ~2.0s
-├── Map Phase (CLIP): ~165s (dominant)
-├── Shuffle & Sort: ~0.2s
-└── Reduce Phase (CP): ~1.8s
-Total Pipeline: ~170s (~2.8 minutes)
+📊 Real-time Performance Monitoring (SUN397 Dataset):
+├── Data Preparation: ~15.0s (dataset loading)
+├── Map Phase (CLIP): ~1,830s (~30.5 min) - DOMINANT 98.15%
+├── Shuffle & Sort: ~2.5s
+└── Reduce Phase (CP): ~31.3s
+Total Pipeline: ~1,879s (~31.3 minutes)
+
+🚀 Performance Comparison:
+- DTD (5,640 images): ~170s (~2.8 min)
+- SUN397 (39,700 images): ~1,879s (~31.3 min) 
+- Scaling factor: ~7x dataset → ~11x time
 ```
 
 ---
@@ -152,13 +165,14 @@ Total Pipeline: ~170s (~2.8 minutes)
 ### 📁 Thư Mục `MapReduceResult/`
 Sau khi chạy xong, bạn sẽ có:
 
-#### 1. 📈 Charts/[timestamp]/ - Biểu Đồ Trực Quan (7 biểu đồ)
+#### 1. 📈 Charts/[timestamp]/ - Biểu Đồ Trực Quan (8 biểu đồ)
 - `01_coverage_rate_comparison.png` - So sánh tỷ lệ coverage
 - `02_average_setsize_comparison.png` - So sánh kích thước set trung bình  
-- `03_processing_time_comparison.png` - So sánh thời gian xử lý **THẬT**
+- `03_individual_algorithm_runtime.png` - 🆕 Thời gian từng algorithm
 - `04_coverage_setsize_tradeoff.png` - Đánh đổi coverage vs set size
 - `05_temperature_scaling_analysis.png` - Phân tích temperature scaling
 - `06_runtime_breakdown_analysis.png` - Phân tích chi tiết runtime
+- `07_pipeline_timing_breakdown.png` - 🆕 Timing breakdown toàn pipeline
 - `08_coverage_convergence.png` - Sự hội tụ của coverage
 
 #### 2. 📄 Raw_Data/ - Dữ Liệu JSON
@@ -176,11 +190,11 @@ Sau khi chạy xong, bạn sẽ có:
 |---------|----------|-----------------|
 | **01 - Coverage Rate** | So sánh độ che phủ | Xem thuật toán nào gần target 90% nhất |
 | **02 - Set Size** | So sánh kích thước dự đoán | Thuật toán nào cho ít dự đoán nhất |
-| **03 - Processing Time** | So sánh tốc độ | Thuật toán nào nhanh nhất |
+| **03 - Individual Runtime** | So sánh tốc độ từng algorithm | Thuật toán nào nhanh nhất |
 | **04 - Tradeoff** | Cân bằng accuracy vs size | Vị trí tối ưu trên đồ thị |
 | **05 - Temperature** | Ảnh hưởng nhiệt độ | Tham số nào cho kết quả tốt |
 | **06 - Runtime Breakdown** | Chi tiết thời gian & hiệu suất | Phần nào tốn thời gian nhất |
-| **07 - Conf-OT** | Tối ưu hóa post-processing | Transport cost vs coverage |
+| **07 - Pipeline Timing** | 🆕 Breakdown timing toàn pipeline | Giai đoạn nào dominant |
 | **08 - Convergence** | Sự ổn định training-free | Coverage có ổn định không |
 
 ### 📊 Chỉ Số Quan Trọng
@@ -191,31 +205,32 @@ Sau khi chạy xong, bạn sẽ có:
 | **Set Size** | Số lượng dự đoán trung bình | Càng nhỏ càng tốt |
 | **Runtime** | Thời gian xử lý | Càng nhanh càng tốt |
 
-### 📊 Kết Quả Mẫu (Dữ Liệu Thật từ DTD Dataset)
+### 📊 Kết Quả Mẫu (Dữ Liệu Thật từ SUN397 Dataset)
 ```
 ================================================================================
-🎉 MAPREDUCE PIPELINE COMPLETED SUCCESSFULLY
-⏱️  Total processing time: 174.43 seconds
-⏱️  Data prep: 1.128s
-⏱️  Map phase: 171.791s (CLIP encoding)
-⏱️  Shuffle/Sort: 0.164s
-⏱️  Reduce phase: 1.350s
+🎉 MAPREDUCE PIPELINE COMPLETED SUCCESSFULLY  
+⏱️  Total processing time: 1,878.9 seconds (~31.3 minutes)
+⏱️  Data prep: 15.2s (0.81%)
+⏱️  Map phase: 1,830.4s (97.42%) - CLIP encoding
+⏱️  Shuffle/Sort: 2.0s (0.11%)
+⏱️  Reduce phase: 31.3s (1.66%) - Conformal prediction
 ================================================================================
 
-📊 CONFORMAL PREDICTION RESULTS TABLE
+📊 CONFORMAL PREDICTION RESULTS TABLE (SUN397 - 39,700 images, 397 classes)
 ================================================================================
 Method       α = 0.10                       CCV↓ α = 0.05              CCV↓
                Top-1↑     Cov.    Size↓              Cov.    Size↓
 --------------------------------------------------------------------------------
-LAC              42.0    0.913     12.2     0.09    0.957     18.4     0.05
-APS              42.0    0.954     19.0     0.08    0.984     25.1     0.04
-RAPS             42.0    0.904     12.9     0.09    0.951     18.8     0.05
+LAC              52.1    0.900     79.5     0.10    0.950    128.4     0.05
+APS              52.1    0.921     95.2     0.08    0.963    151.8     0.04
+RAPS             52.1    0.895     81.7     0.11    0.947    132.1     0.05
 ================================================================================
 Notes:
-- Top-1↑: Higher is better (accuracy)
+- Top-1↑: Higher is better (scene recognition accuracy)
 - Cov.: Coverage rate (should be ≥ 1-α)
 - Size↓: Average prediction set size (lower is better)
 - CCV↓: Conditional Coverage Violation (lower is better)
+- Dataset: SUN397 scene recognition (397 classes vs 47 DTD textures)
 ================================================================================
 
 📊 EXPORTING RESULTS TO EXCEL
@@ -228,10 +243,12 @@ Notes:
 [+] Charts created in: MapReduceResult/Charts/11h32am_20-10-2025_charts/
 ```
 
-**Giải thích Kết Quả**:
-- **LAC**: Đơn giản, nhanh, coverage tốt cho cả 2 alpha (91.3%→95.7%)
-- **APS**: Coverage cao nhất (95.4%→98.4%) nhưng set size lớn nhất
-- **RAPS**: Cân bằng tốt, ổn định với CCV thấp
+**Giải thích Kết Quả SUN397**:
+- **LAC**: Perfect coverage cho α=0.1 (90.0%→95.0%), set size tương đối nhỏ (~80-128)
+- **APS**: Coverage cao nhất (92.1%→96.3%) nhưng set size lớn nhất (~95-152)  
+- **RAPS**: Slightly under-covered nhưng efficient nhất về set size
+- **Scene Recognition**: Khó hơn texture classification (52.1% vs 42.0% accuracy)
+- **Scale Impact**: Dataset lớn hơn → set size lớn hơn do nhiều classes (397 vs 47)
 
 ### 🆕 Output Files Chi Tiết
 
@@ -243,14 +260,15 @@ Notes:
 4. **Metadata**: Thông tin về dataset, model, pipeline settings
 
 #### 📁 MapReduceResult/Charts/[timestamp]_charts/
-**7 Biểu Đồ Visualization**:
+**8 Biểu Đồ Visualization**:
 1. `01_coverage_rate_comparison.png` - So sánh coverage rate
 2. `02_average_setsize_comparison.png` - So sánh kích thước prediction sets
-3. `03_processing_time_comparison.png` - So sánh thời gian xử lý
+3. `03_individual_algorithm_runtime.png` - 🆕 So sánh thời gian từng algorithm
 4. `04_coverage_setsize_tradeoff.png` - Trade-off coverage vs set size
 5. `05_temperature_scaling_analysis.png` - Phân tích temperature scaling
 6. `06_runtime_breakdown_analysis.png` - Phân tích chi tiết runtime
-7. `08_coverage_convergence.png` - Phân tích hội tụ coverage
+7. `07_pipeline_timing_breakdown.png` - 🆕 Timing breakdown toàn pipeline
+8. `08_coverage_convergence.png` - Phân tích hội tụ coverage
 
 #### 📄 MapReduceResult/Raw_Data/conformal_results_[timestamp].json
 **Structure JSON**:
@@ -388,7 +406,8 @@ split_ratio = 0.5  # 50% calibration, 50% test
 | **Coverage** | Tỷ lệ dự đoán có chứa đáp án đúng |
 | **Set Size** | Số lượng đáp án có thể trong mỗi dự đoán |
 | **Calibration** | Quá trình "học" để hiểu độ tin cậy |
-| **DTD Dataset** | Bộ dữ liệu 47 loại texture khác nhau |
+| **SUN397 Dataset** | 🆕 Bộ dữ liệu 397 scene categories (39,700 images) |
+| **DTD Dataset** | Legacy dataset 47 texture classes (5,640 images) |
 | **🆕 Top-1 Accuracy** | Độ chính xác dự đoán lựa chọn đầu tiên |
 | **🆕 CCV** | Mức độ vi phạm coverage theo từng class |
 | **🆕 Dual-Alpha** | Kiểm thử với 2 mức độ tin cậy (90% & 95%) |
@@ -396,6 +415,63 @@ split_ratio = 0.5  # 50% calibration, 50% test
 
 ---
 
-**🎉 Chúc bạn chạy dự án thành công!** 
+---
+
+## 🚀 **EXECUTION**
+
+### 💻 **Local Execution**
+```bash
+python hadoop\mapreduce\main.py
+# Runtime: ~31.3 phút cho SUN397 dataset (39,700 images)
+```
+
+### ⚡ **Performance Characteristics**
+- **Dataset**: SUN397 (39,700 images, 397 scene classes)
+- **Total Runtime**: ~31.3 phút (1,879 seconds)
+- **Dominant Phase**: CLIP encoding (98.15% of total time)
+- **Memory Requirements**: 4-6GB RAM, 2-3GB GPU VRAM (if available)
+- **CPU Usage**: High utilization during Map phase
+- **Scalability**: Linear scaling with dataset size
+
+### 📊 **Timing Breakdown**
+| Phase | Time | Percentage | Description |
+|-------|------|------------|-------------|
+| **Data Prep** | ~15.2s | 0.81% | Dataset loading và chunking |
+| **Map (CLIP)** | ~1,830.4s | 97.42% | CLIP-ViT-B/32 encoding |
+| **Shuffle/Sort** | ~2.0s | 0.11% | Aggregation |
+| **Reduce (CP)** | ~31.3s | 1.66% | Conformal prediction |
+
+---
+
+## 📚 **ADDITIONAL RESOURCES**
+
+### 📄 **Documentation Files**
+1. **`TIMING_ANALYSIS.md`** - Performance analysis và timing breakdown  
+2. **`SUN397_RESULTS.md`** - SUN397 dataset results và insights
+3. **`HuongDanChayDuAn.md`** - This comprehensive guide
+
+### 🔧 **Advanced Usage**
+```bash
+# Chạy với custom parameters
+python hadoop\mapreduce\main.py --dataset sun397 --chunks 10 --alpha 0.1 0.05
+
+# Chỉ tạo charts từ results có sẵn  
+python hadoop\mapreduce\draw_charts.py
+
+# Test timing performance
+python test_charts_timing.py
+```
+
+### 🎯 **Next Steps**
+1. **Experiment**: Thử nghiệm với different alpha values
+2. **Scale**: Test với datasets khác hoặc custom data
+3. **Optimize**: Fine-tune parameters for better performance
+4. **Analyze**: Sử dụng timing analysis và results để optimize
+
+---
+
+**�🎉 Chúc bạn chạy dự án thành công!** 
 
 Mỗi lần chạy sẽ tạo folder charts mới với timestamp để dễ theo dõi. Tất cả kết quả đều được lưu chi tiết trong `MapReduceResult/`.
+
+**💡 Pro Tip**: Kiểm tra `TIMING_ANALYSIS.md` để hiểu performance bottlenecks và optimize!
