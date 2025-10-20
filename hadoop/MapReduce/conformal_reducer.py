@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
 GIAI ĐOẠN 4: HADOOP REDUCER - CONFORMAL PREDICTION
-- Gộp toàn bộ logits từ các Mappers thành ma trận [1692 × 47]
+- Gộp toàn bộ logits từ các Mappers thành ma trận [~19850 × 397]
 - Chia dữ liệu: calibration (50%) và test (50%)
 - Tính non-conformity scores với temperature scaling
-- Áp dụng LAC, APS, RAPS với α = 0.1 (90% coverage)
+- Áp dụng LAC, APS, RAPS với α = 0.1, 0.05 (90%, 95% coverage)
 - Output: prediction sets với đảm bảo thống kê
 """
 
@@ -362,7 +362,7 @@ def load_and_merge_logits(downloaded_files):
         try:
             data = np.load(file_path, allow_pickle=True)
             
-            logits = data['logits']      # [n_samples, 47]
+            logits = data['logits']      # [n_samples, 397]
             labels = data['labels']      # [n_samples]
             image_ids = data['image_ids'] # [n_samples]
             
@@ -378,7 +378,7 @@ def load_and_merge_logits(downloaded_files):
     
     # Gộp thành ma trận hoàn chỉnh
     if all_logits:
-        merged_logits = np.vstack(all_logits)  # [total_samples, 47]
+        merged_logits = np.vstack(all_logits)  # [total_samples, 397]
         merged_labels = np.array(all_labels)   # [total_samples]
         
         print(f"✅ Merged logits shape: {merged_logits.shape}", file=sys.stderr)

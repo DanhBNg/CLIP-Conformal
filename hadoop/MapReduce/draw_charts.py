@@ -72,8 +72,8 @@ def create_runtime_comparison_chart(methods, runtimes, session_charts_dir):
     colors = [base_colors[i % len(base_colors)] for i in range(len(methods))]
     
     bars = ax.bar(methods, [r*1000 for r in runtimes], color=colors, alpha=0.7, edgecolor='black')
-    ax.set_ylabel('Processing Time (ms)', fontweight='bold')
-    ax.set_title('(c) Processing Time Comparison', fontweight='bold')
+    ax.set_ylabel('Algorithm Runtime (ms)', fontweight='bold')
+    ax.set_title('(c) Individual Algorithm Runtime Comparison\n(Conformal Prediction Phase Only)', fontweight='bold', fontsize=12)
     ax.grid(axis='y', alpha=0.3)
     
     # Add value labels on bars
@@ -98,7 +98,7 @@ def create_temperature_scaling_analysis_chart(methods, coverage_rates, set_sizes
     temperatures = np.linspace(0.6, 1.4, 9)
     
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-    fig.suptitle('Temperature Scaling Analysis on DTD Dataset', fontsize=14, fontweight='bold')
+    fig.suptitle('Temperature Scaling Analysis on SUN397 Dataset', fontsize=14, fontweight='bold')
     
     # Colors for methods
     colors = ['#2E86AB', '#A23B72', '#F18F01']
@@ -189,7 +189,7 @@ def create_runtime_breakdown_chart(methods, runtimes, coverage_rates, set_sizes,
                 label='Inference', color=colors[2], alpha=0.8, edgecolor='black')
     
     ax1.set_ylabel('Time (seconds)', fontweight='bold')
-    ax1.set_title('(a) Runtime Breakdown', fontweight='bold')
+    ax1.set_title('(a) Algorithm Runtime Breakdown\n(Conformal Prediction Phase Only)', fontweight='bold', fontsize=12)
     ax1.set_xticks(x)
     ax1.set_xticklabels(methods)
     ax1.legend()
@@ -206,7 +206,7 @@ def create_runtime_breakdown_chart(methods, runtimes, coverage_rates, set_sizes,
     colors_bar = ['#2E86AB', '#A23B72', '#F18F01']
     bars = ax2.bar(methods, efficiency_scores, color=colors_bar, alpha=0.7, edgecolor='black')
     ax2.set_ylabel('Efficiency Score\n(Coverage / Set Size × Time)', fontweight='bold')
-    ax2.set_title('(b) Method Efficiency Comparison', fontweight='bold')
+    ax2.set_title('(b) Method Efficiency Comparison\n(Higher is Better)', fontweight='bold', fontsize=12)
     ax2.grid(True, alpha=0.3, axis='y')
     
     # Add ACTUAL efficiency score labels
@@ -282,6 +282,57 @@ def create_confot_optimization_chart(coverage_rates, session_charts_dir):
     print(f'[+] Created: {chart_file}')
 
 
+def create_pipeline_timing_chart(stage_times, session_charts_dir):
+    """Create pipeline timing breakdown chart"""
+    import matplotlib.pyplot as plt
+    import numpy as np
+    
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    
+    # Extract stage times
+    stages = ['Data Prep', 'Map Phase\n(CLIP)', 'Shuffle/Sort', 'Reduce Phase\n(Conformal)']
+    times = [
+        stage_times.get('data_preparation', 0),
+        stage_times.get('map_phase', 0),
+        stage_times.get('shuffle_sort', 0),
+        stage_times.get('reduce_phase', 0)
+    ]
+    
+    # Convert to minutes for better readability
+    times_minutes = [t/60 for t in times]
+    total_time = sum(times)
+    percentages = [(t/total_time)*100 for t in times]
+    
+    # Chart 1: Bar chart of absolute times
+    colors = ['#3498db', '#e74c3c', '#f39c12', '#2ecc71']
+    bars = ax1.bar(stages, times_minutes, color=colors, alpha=0.8, edgecolor='black')
+    
+    ax1.set_ylabel('Time (minutes)', fontweight='bold')
+    ax1.set_title('(a) Pipeline Stage Times\n(Absolute Duration)', fontweight='bold', fontsize=12)
+    ax1.grid(axis='y', alpha=0.3)
+    
+    # Add value labels
+    for bar, time_min, pct in zip(bars, times_minutes, percentages):
+        ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.2,
+                f'{time_min:.1f}m\n({pct:.1f}%)', ha='center', va='bottom', fontweight='bold')
+    
+    # Chart 2: Pie chart of percentages
+    ax2.pie(percentages, labels=stages, colors=colors, autopct='%1.1f%%', 
+            startangle=90, explode=(0, 0.1, 0, 0))  # Explode map phase
+    ax2.set_title('(b) Pipeline Time Distribution\n(Percentage Breakdown)', fontweight='bold', fontsize=12)
+    
+    # Add total time info
+    fig.suptitle(f'SUN397 Processing Pipeline Analysis\nTotal Time: {total_time/60:.1f} minutes ({total_time:.0f} seconds)', 
+                 fontsize=14, fontweight='bold', y=0.98)
+    
+    plt.tight_layout()
+    chart_file = session_charts_dir / '07_pipeline_timing_breakdown.png'
+    plt.savefig(chart_file, dpi=300, bbox_inches='tight', facecolor='white')
+    plt.close()
+    
+    print(f'[+] Created: {chart_file}')
+
+
 def create_coverage_convergence_chart(coverage_rates, target_coverage, session_charts_dir):
     """Create Coverage Convergence chart based on actual coverage results"""
     import matplotlib.pyplot as plt
@@ -342,7 +393,7 @@ def create_coverage_convergence_chart(coverage_rates, target_coverage, session_c
     # Formatting
     ax.set_xlabel('Calibration Steps', fontweight='bold')
     ax.set_ylabel('Coverage Rate', fontweight='bold')
-    ax.set_title('Coverage Convergence in Training-Free Process\n(Based on actual DTD results)', 
+    ax.set_title('Coverage Convergence in Training-Free Process\n(Based on actual SUN397 results)', 
                 fontweight='bold', fontsize=14)
     ax.grid(True, alpha=0.3)
     ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
@@ -628,6 +679,10 @@ def create_visualization_charts(results, texture_classes, output_dir=None):
         
         create_runtime_comparison_chart(methods, runtimes, session_charts_dir)
         create_runtime_breakdown_chart(methods, runtimes, coverage_rates, set_sizes, session_charts_dir)
+        
+        # Create pipeline timing chart if stage_times available
+        if '_stage_times' in methods_data:
+            create_pipeline_timing_chart(methods_data['_stage_times'], session_charts_dir)
         create_tradeoff_scatter_chart(methods, coverage_rates, set_sizes, runtimes, session_charts_dir)
         
         print(f"✅ All charts created in: {session_charts_dir}")

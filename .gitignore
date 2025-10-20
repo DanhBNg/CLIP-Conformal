@@ -33,3 +33,10 @@ env/
 .Trashes
 ehthumbs.db
 Thumbs.db
+# Dataset files - not committed due to large size
+local_data/
+**/sun397/
+**/SUN397/
+temp/
+temp/**
+*.npy

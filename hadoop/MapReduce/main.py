@@ -28,7 +28,7 @@ try:
     from draw_charts import create_visualization_charts
 except ImportError:
     print("Warning: draw_charts module not found")
-    def create_visualization_charts(results, texture_classes):
+    def create_visualization_charts(results, scene_classes):
         print("Charts module not available")
 
 def setup_hadoop_environment():
@@ -51,7 +51,7 @@ def setup_hadoop_environment():
 def stage1_prepare_data():
     """
     GIAI ĐOẠN 1: CHUẨN BỊ DỮ LIỆU ĐẦU VÀO
-    DTD dataset chia thành chunks và upload lên HDFS
+    SUN397 dataset chia thành 10 chunks
     """
     print("\n" + "="*60)
     print("📁 STAGE 1: PREPARING INPUT DATA")
@@ -59,26 +59,30 @@ def stage1_prepare_data():
     
     # Import prepare_data functions
     from prepare_data import (
-        load_dtd_dataset, 
-        create_dtd_chunks, 
+        load_sun397_dataset, 
+        create_sun397_chunks, 
         save_chunks_to_files,
         create_class_descriptions
     )
     
-    # Load DTD dataset (5,640 ảnh)
-    all_images, texture_classes = load_dtd_dataset()
+    # Load SUN397 dataset - Full merged dataset (39,700 images)
+    print("🚀 Loading FULL SUN397 merged dataset")
+    print("� Expected: ~39,700 images, 397 scene classes")
+    print("⏱️  Estimated processing time: ~32 minutes")
     
-    # Chia thành 4 chunks (1410 ảnh/chunk) - tương ứng HDFS block size 128MB
-    chunks = create_dtd_chunks(all_images, chunk_size=1410)
+    all_images, scene_classes = load_sun397_dataset()
+    
+    # Chia thành 10 chunks (~3,970 ảnh/chunk)
+    chunks = create_sun397_chunks(all_images)
     
     # Save chunks to files
     chunk_files = save_chunks_to_files(chunks)
     
     # Create class descriptions for text encoder
-    descriptions_file = create_class_descriptions(texture_classes)
+    descriptions_file = create_class_descriptions(scene_classes)
     
     print("✅ Stage 1 completed: Data prepared for MapReduce")
-    return chunk_files, descriptions_file, texture_classes
+    return chunk_files, descriptions_file, scene_classes
 
 def stage2_map_phase(chunk_files, descriptions_file):
     """
@@ -136,7 +140,7 @@ def stage3_shuffle_sort(mapper_outputs):
     print("✅ Stage 3 completed: Data shuffled and sorted")
     return sorted_outputs
 
-def stage4_reduce_phase(sorted_outputs, texture_classes):
+def stage4_reduce_phase(sorted_outputs, scene_classes):
     """
     GIAI ĐOẠN 4: REDUCE PHASE - CONFORMAL PREDICTION
     Gộp toàn bộ logits và apply Conformal Prediction
@@ -148,7 +152,7 @@ def stage4_reduce_phase(sorted_outputs, texture_classes):
     # Import conformal prediction modules
     from conformal_reducer import aggregate_mapper_outputs, run_conformal_algorithms
     
-    # Aggregate toàn bộ logits từ mappers thành ma trận [total_samples × 47]
+    # Aggregate toàn bộ logits từ mappers thành ma trận [total_samples × 397]
     print("🔗 Aggregating logits from all mappers...")
     combined_logits, combined_labels = aggregate_mapper_outputs(sorted_outputs)
     
@@ -249,7 +253,7 @@ def save_results(results, output_dir=None):
         # Generate timestamp
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        excel_file = reports_dir / f'DTD_Conformal_Prediction_Results_{timestamp}.xlsx'
+        excel_file = reports_dir / f'SUN397_Conformal_Prediction_Results_{timestamp}.xlsx'
         
         # Create Excel writer with multiple sheets
         with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
@@ -350,7 +354,7 @@ def save_results(results, output_dir=None):
         
         df = pd.DataFrame(excel_data)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        excel_file = reports_dir / f'DTD_Conformal_Prediction_Results_{timestamp}.xlsx'
+        excel_file = reports_dir / f'SUN397_Conformal_Prediction_Results_{timestamp}.xlsx'
         
         with pd.ExcelWriter(excel_file) as writer:
             df.to_excel(writer, sheet_name='Results Summary', index=False)
@@ -427,7 +431,7 @@ def save_results(results, output_dir):
         
         df = pd.DataFrame(excel_data)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        excel_file = reports_dir / f'DTD_Conformal_Prediction_Results_{timestamp}.xlsx'
+        excel_file = reports_dir / f'SUN397_Conformal_Prediction_Results_{timestamp}.xlsx'
         
         with pd.ExcelWriter(excel_file) as writer:
             df.to_excel(writer, sheet_name='Results Summary', index=False)
@@ -465,7 +469,7 @@ def mapreduce_orchestrator():
     try:
         # STAGE 1: Prepare data
         stage_start = time.time()
-        chunk_files, descriptions_file, texture_classes = stage1_prepare_data()
+        chunk_files, descriptions_file, scene_classes = stage1_prepare_data()
         stage_times['data_preparation'] = time.time() - stage_start
         
         # STAGE 2: Map phase - CLIP encoding
@@ -480,7 +484,7 @@ def mapreduce_orchestrator():
         
         # STAGE 4: Reduce phase - Conformal Prediction
         stage_start = time.time()
-        results = stage4_reduce_phase(sorted_outputs, texture_classes)
+        results = stage4_reduce_phase(sorted_outputs, scene_classes)
         stage_times['reduce_phase'] = time.time() - stage_start
         
         # Calculate total time
@@ -490,6 +494,11 @@ def mapreduce_orchestrator():
         # Add timing data to results để pass cho chart generation
         results['_stage_times'] = stage_times
         
+        # Calculate percentages for better understanding
+        map_pct = (stage_times['map_phase'] / total_time) * 100
+        reduce_pct = (stage_times['reduce_phase'] / total_time) * 100
+        other_pct = ((stage_times['data_preparation'] + stage_times['shuffle_sort']) / total_time) * 100
+        
         print("\n" + "="*80)
         print("🎉 MAPREDUCE PIPELINE COMPLETED SUCCESSFULLY")
         print(f"⏱️  Total processing time: {total_time:.2f} seconds")
@@ -497,15 +506,22 @@ def mapreduce_orchestrator():
         print(f"⏱️  Map phase: {stage_times['map_phase']:.3f}s") 
         print(f"⏱️  Shuffle/Sort: {stage_times['shuffle_sort']:.3f}s")
         print(f"⏱️  Reduce phase: {stage_times['reduce_phase']:.3f}s")
+        print("\n📊 TIMING BREAKDOWN:")
+        print("-" * 40)
+        print(f"Map Phase (CLIP Encoding):    {stage_times['map_phase']/60:.1f} min ({map_pct:.1f}%)")
+        print(f"Reduce Phase (Conformal):     {stage_times['reduce_phase']:.1f} sec ({reduce_pct:.1f}%)")
+        print(f"Data Prep + Shuffle:          {(stage_times['data_preparation']+stage_times['shuffle_sort']):.1f} sec ({other_pct:.1f}%)")
+        print(f"\n💡 NOTE: Chart runtimes show individual algorithm times ({stage_times['reduce_phase']:.1f}s total)")
+        print(f"         Pipeline total time includes CLIP encoding ({stage_times['map_phase']/60:.1f} min)")
         print("="*80)
         
-        return results, texture_classes
+        return results, scene_classes
         
     except Exception as e:
         print(f"\n❌ MAPREDUCE PIPELINE FAILED: {e}")
         raise e
 
-def create_results_summary(results, texture_classes):
+def create_results_summary(results, scene_classes):
     """Create results summary for charts với real timing data"""
     print("\n📊 CREATING RESULTS SUMMARY")
     print("-" * 40)
@@ -651,7 +667,7 @@ def export_results_to_excel(results, output_dir):
             metadata = {
                 'Generated_Date': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')],
                 'Total_Samples': [len(results[0.1]['LAC'].get('prediction_sets', []))],
-                'Dataset': ['DTD Texture Dataset'],
+                'Dataset': ['SUN397 Scene Dataset'],
                 'Model': ['CLIP ViT-B/32'],
                 'Alpha_Values_Tested': ['0.10, 0.05'],
                 'Methods': ['LAC, APS, RAPS'],
@@ -683,8 +699,8 @@ def main():
         # Set random seed for reproducibility
         np.random.seed(42)
         
-        # Run MapReduce pipeline thay vì load_dtd_data()
-        results, texture_classes = mapreduce_orchestrator()
+        # Run MapReduce pipeline thay vì load_sun397_data()
+        results, scene_classes = mapreduce_orchestrator()
         
         # Save results to original MapReduceResult directory (at project root)
         project_root = Path(__file__).parent.parent.parent  # Go up from hadoop/mapreduce to project root
@@ -720,12 +736,12 @@ def main():
         print(f"✅ Results saved to: {results_file}")
         
         # Create results summary for charts
-        summary = create_results_summary(results, texture_classes)
+        summary = create_results_summary(results, scene_classes)
         
         # Generate visualization charts using real results
         print("\n📊 GENERATING VISUALIZATION CHARTS")
         print("-" * 40)
-        create_visualization_charts(summary, texture_classes, output_dir=output_dir)
+        create_visualization_charts(summary, scene_classes, output_dir=output_dir)
         
         # Import and call the results table function
         from conformal_reducer import create_results_table
@@ -752,7 +768,7 @@ def main():
                   f"Size={size:.1f}")
         
         print(f'\n[+] Results saved in: {output_dir}')
-        print('[+] DTD Conformal Prediction completed successfully via MapReduce!')
+        print('[+] SUN397 Conformal Prediction completed successfully via MapReduce!')
         
         return True
         

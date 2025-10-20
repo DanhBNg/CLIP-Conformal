@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
 GIAI ĐOẠN 2: HADOOP MAPPER - CLIP ENCODING
-- Mỗi Mapper đọc 1 chunk từ HDFS (1410 ảnh)
+- Mỗi Mapper đọc 1 chunk từ HDFS (~3970 ảnh)
 - Khởi tạo CLIP-ViT-B/32 model trong memory
 - Xử lý song song: Vision Encoder + Text Encoder
-- Tính cosine similarity và tạo logits matrix [batch_size × 47]
+- Tính cosine similarity và tạo logits matrix [batch_size × 397]
 - Output: logits.npz files lưu trở lại HDFS
 """
 
@@ -97,7 +97,7 @@ def process_chunk_local(chunk_file, descriptions_file, chunk_id):
         combined_logits = np.vstack(all_logits)
     else:
         # Fallback nếu không có logits
-        combined_logits = np.random.randn(len(image_paths), 47)
+        combined_logits = np.random.randn(len(image_paths), 397)
     
     # Save outputs
     output_dir = Path("temp") / "mapper_outputs"
@@ -177,10 +177,10 @@ def load_class_descriptions():
     global class_descriptions
     
     # Download class descriptions từ HDFS
-    desc_file = "/tmp/dtd_class_descriptions.json"
+    desc_file = "/tmp/sun397_class_descriptions.json"
     
     # Sử dụng hdfs command để download
-    os.system(f"hdfs dfs -get /input/class_info/dtd_class_descriptions.json {desc_file}")
+    os.system(f"hdfs dfs -get /input/class_info/sun397_class_descriptions.json {desc_file}")
     
     if os.path.exists(desc_file):
         with open(desc_file, 'r') as f:
@@ -192,7 +192,7 @@ def load_class_descriptions():
 
 def encode_text_prompts():
     """
-    Encode tất cả text prompts cho 47 DTD classes
+    Encode tất cả text prompts cho 397 SUN397 classes
     """
     global clip_model, class_descriptions, device
     
@@ -255,7 +255,7 @@ def save_logits_to_npz(logits, labels, image_ids, chunk_id):
     
     np.savez_compressed(
         output_file,
-        logits=logits,           # [n_samples, 47]
+        logits=logits,           # [n_samples, 397]
         labels=labels,           # [n_samples]
         image_ids=image_ids,     # [n_samples]
         chunk_id=chunk_id

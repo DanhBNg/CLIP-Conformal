@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 GIAI ĐOẠN 1: CHUẨN BỊ DỮ LIỆU ĐẦU VÀO
-- DTD dataset (5,640 ảnh) chia thành 4 chunks (1410 ảnh/chunk)
-- Tương ứng với HDFS block size (128MB)
+- SUN397 dataset (39,700 ảnh) chia thành 10 chunks (~3,970 ảnh/chunk)
 - Load balancing tối ưu cho worker nodes
+- Scene recognition với 397 classes
 """
 
 import os
@@ -21,31 +21,39 @@ project_root = Path(__file__).parent.parent.parent
 canonical_hadoop_input = project_root / "hadoop_input"
 canonical_hadoop_input.mkdir(parents=True, exist_ok=True)
 
-def load_dtd_dataset():
-    """Load toàn bộ DTD dataset từ thư mục images"""
+def load_sun397_dataset():
+    """
+    Load SUN397 dataset từ thư mục duy nhất (đã merge train + test)
+    Returns: all_images (39,700 ảnh), scene_classes (397 classes)
+    """
     # Use absolute path từ project root
     project_root = Path(__file__).parent.parent.parent
-    dtd_root = project_root / "local_data" / "datasets" / "dtd" / "images"
+    sun397_root = project_root / "local_data" / "datasets" / "sun397"
     
-    # DTD có 47 texture classes
-    texture_classes = [
-        'banded', 'blotchy', 'braided', 'bubbly', 'bumpy', 'chequered',
-        'cobwebbed', 'cracked', 'crosshatched', 'crystalline', 'dotted',
-        'fibrous', 'flecked', 'freckled', 'frilly', 'gauzy', 'grid',
-        'grooved', 'honeycombed', 'interlaced', 'knitted', 'lacelike',
-        'lined', 'marbled', 'matted', 'meshed', 'paisley', 'perforated',
-        'pitted', 'pleated', 'polka-dotted', 'porous', 'potholed',
-        'scaly', 'smeared', 'spiralled', 'sprinkled', 'stained',
-        'stratified', 'striped', 'studded', 'swirly', 'veined',
-        'waffled', 'woven', 'wrinkled', 'zigzagged'
-    ]
+    # Check for merged directory first (preferred)
+    if (sun397_root / "all").exists():
+        data_dir = sun397_root / "all"
+        print(f"📁 Loading MERGED SUN397 dataset from {data_dir}")
+    elif sun397_root.exists() and any(sun397_root.iterdir()):
+        # If no 'all' folder, assume sun397 root contains the classes directly
+        data_dir = sun397_root
+        print(f"📁 Loading SUN397 dataset from {data_dir}")
+    else:
+        raise FileNotFoundError(f"SUN397 dataset not found in {sun397_root}")
+    
+    # Get all scene classes từ thư mục
+    scene_classes = []
+    for class_dir in sorted(data_dir.iterdir()):
+        if class_dir.is_dir() and not class_dir.name.startswith('.'):
+            scene_classes.append(class_dir.name)
+    
+    print(f"🏞️  Found {len(scene_classes)} scene classes")
     
     all_images = []
     
-    print(f"📁 Loading DTD dataset from {dtd_root}")
-    
-    for class_idx, texture_name in enumerate(texture_classes):
-        class_dir = dtd_root / texture_name
+    print(f"📂 Processing all images...")
+    for class_idx, scene_name in enumerate(scene_classes):
+        class_dir = data_dir / scene_name
         
         if not class_dir.exists():
             print(f"⚠️  Warning: {class_dir} not found")
@@ -55,27 +63,52 @@ def load_dtd_dataset():
         image_files = list(class_dir.glob("*.jpg"))
         
         for img_path in image_files:
+            # Detect original split from filename if available
+            split_info = "unknown"
+            if img_path.name.startswith("train_"):
+                split_info = "train"
+            elif img_path.name.startswith("test_"):
+                split_info = "test"
+            
             image_record = {
                 'image_path': str(img_path.absolute()),
-                'class_name': texture_name,
-                'class_idx': class_idx
+                'class_name': scene_name,
+                'class_idx': class_idx,
+                'split': split_info  # Thông tin split nếu có
             }
             all_images.append(image_record)
     
-    print(f"✅ Loaded {len(all_images)} images across {len(texture_classes)} texture classes")
+    print(f"✅ Loaded {len(all_images)} images across {len(scene_classes)} scene classes")
     
-    return all_images, texture_classes
+    # Count splits if available
+    train_count = len([img for img in all_images if img['split'] == 'train'])
+    test_count = len([img for img in all_images if img['split'] == 'test'])
+    unknown_count = len([img for img in all_images if img['split'] == 'unknown'])
+    
+    if train_count > 0 or test_count > 0:
+        print(f"   📊 Train: {train_count} images, Test: {test_count} images, Unknown: {unknown_count} images")
+    
+    return all_images, scene_classes
 
-def create_dtd_chunks(all_images, chunk_size=1410):
-    """Chia DTD dataset thành chunks"""
-    print(f"✂️  Creating chunks of size {chunk_size}")
+def create_sun397_chunks(all_images, num_chunks=10):
+    """
+    Chia SUN397 dataset thành chunks
+    Args:
+        all_images: List of image records
+        num_chunks: Số chunks (default: 10)
+    """
+    total_images = len(all_images)
+    chunk_size = math.ceil(total_images / num_chunks)
+    
+    print(f"✂️  Creating {num_chunks} chunks from {total_images} images")
+    print(f"   📦 Chunk size: ~{chunk_size} images each")
     
     # Shuffle để đảm bảo distribution đồng đều
     np.random.shuffle(all_images)
     
     chunks = []
     
-    for i in range(0, len(all_images), chunk_size):
+    for i in range(0, total_images, chunk_size):
         chunk = all_images[i:i+chunk_size]
         chunks.append(chunk)
         print(f"  Chunk {len(chunks)}: {len(chunk)} images")
@@ -110,7 +143,7 @@ def save_chunks_to_files(chunks):
     print(f"✅ All chunks saved to {chunks_dir}")
     return chunk_files
 
-def create_class_descriptions(texture_classes):
+def create_class_descriptions(scene_classes):
     """Tạo text descriptions cho CLIP text encoder"""
     print("📝 Creating class descriptions for CLIP text encoder...")
     
@@ -118,11 +151,11 @@ def create_class_descriptions(texture_classes):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     clip_model, _ = clip.load("ViT-B/32", device=device)
     
-    # Create descriptive prompts cho mỗi texture class
+    # Create descriptive prompts cho mỗi scene class
     descriptions = []
-    for texture in texture_classes:
-        # Create descriptive prompt
-        prompt = f"a photo of {texture} texture"
+    for scene in scene_classes:
+        # Create descriptive prompt for scene
+        prompt = f"a photo of a {scene.replace('_', ' ')}"
         descriptions.append(prompt)
     
     print(f"  📝 Created descriptions for {len(descriptions)} classes")
@@ -143,7 +176,9 @@ def create_class_descriptions(texture_classes):
 
 def create_dtd_chunks(all_images, chunk_size=1410):
     """
-    Chia DTD dataset thành chunks theo yêu cầu:
+    LEGACY FUNCTION - No longer used in SUN397 processing.
+    Original DTD dataset chunking implementation:
+    - DTD có 47 classes
     - 5,640 ảnh chia thành 4 chunks
     - Mỗi chunk = 1410 ảnh
     - Đảm bảo load balancing
@@ -277,26 +312,25 @@ def upload_to_hdfs(chunk_files, class_desc_file):
 
 def main():
     """
-    Main function - Chuẩn bị dữ liệu DTD cho MapReduce
+    LEGACY FUNCTION - No longer used. 
+    Main function - Chuẩn bị dữ liệu DTD cho MapReduce (OLD)
     """
-    print("=== DTD DATASET PREPARATION FOR MAPREDUCE ===")
+    print("=== DTD DATASET PREPARATION FOR MAPREDUCE (LEGACY) ===")
     print("=" * 50)
     
-    # Bước 1: Load DTD dataset
-    print("\n[+] Step 1: Loading DTD dataset...")
-    all_images, texture_classes = load_dtd_dataset()
+    # Bước 1: Load SUN397 dataset
+    print("\n[+] Step 1: Loading SUN397 dataset...")
+    all_images, scene_classes = load_sun397_dataset()
     
     if len(all_images) == 0:
-        print("[-] No DTD images found!")
+        print("[-] No SUN397 images found!")
         return False
     
-    # Bước 2: Chia thành chunks
-    print(f"\n[+] Step 2: Creating chunks...")
-    target_chunks = 4
-    chunk_size = math.ceil(len(all_images) / target_chunks)
-    chunks = create_dtd_chunks(all_images, chunk_size)
+    # Bước 2: Chia thành 10 chunks
+    print(f"\n[+] Step 2: Creating 10 chunks...")
+    chunks = create_sun397_chunks(all_images)
     
-    print(f"[+] Created {len(chunks)} chunks, ~{chunk_size} anh/chunk")
+    print(f"[+] Created {len(chunks)} chunks")
     
     # Bước 3: Lưu chunks thành files
     print(f"\n[+] Step 3: Saving chunks to files...")
@@ -304,18 +338,20 @@ def main():
     
     # Bước 4: Tạo class descriptions
     print(f"\n[+] Step 4: Creating class descriptions...")
-    class_desc_file = create_class_descriptions(texture_classes)
+    class_desc_file = create_class_descriptions(scene_classes)
     
-    # Bước 5: Upload lên HDFS
-    print(f"\n[+] Step 5: Uploading to HDFS...")
-    uploaded_chunks = upload_to_hdfs(chunk_files, class_desc_file)
+    # Bước 5: Upload lên HDFS (optional)
+    print(f"\n[+] Step 5: Preparing for processing...")
+    print(f"[+] Files ready for MapReduce processing")
     
     # Summary
-    print(f"\n[+] DTD DATA PREPARATION COMPLETED!")
+    print(f"\n[+] SUN397 DATA PREPARATION COMPLETED!")
     print(f"[+] Total images: {len(all_images)}")
+    print(f"[+] Scene classes: {len(scene_classes)}")
     print(f"[+] Chunks created: {len(chunks)}")
-    print(f"[+] HDFS chunks: {len(uploaded_chunks)}")
     print(f"[+] Ready for CLIP-Conformal MapReduce!")
+    
+    return True
     
     return True
 
